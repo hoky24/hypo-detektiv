@@ -1,30 +1,23 @@
 {
-  "version": 1,
+  "version": 2,
+  "current_mortgage": {
+    "principal": 2000000,
+    "annual_rate": 5.5,
+    "years": 20,
+    "bank_name": "Moje banka",
+    "is_current_bank": true,
+    "additional_costs": [
+      {"name": "Pojištění nemovitosti", "monthly_amount": 200, "one_time_amount": 0}
+    ],
+    "switching_costs": [],
+    "conditions": [],
+    "fixation_years": 0
+  },
   "offers": [
     {
-      "principal": 3000000,
-      "annual_rate": 5.29,
-      "years": 25,
-      "fixation_years": 5,
-      "bank_name": "Česká spořitelna",
-      "is_current_bank": false,
-      "additional_costs": [
-        {"name": "Pojištění nemovitosti", "monthly_amount": 200, "one_time_amount": 0},
-        {"name": "Životní pojištění", "monthly_amount": 350, "one_time_amount": 0}
-      ],
-      "switching_costs": [
-        {"name": "Posouzení vhodnosti zástavy (odhad)", "monthly_amount": 0, "one_time_amount": 3000},
-        {"name": "Zápis zástavního práva — el. podání (ČÚZK)", "monthly_amount": 0, "one_time_amount": 1600},
-        {"name": "Výmaz zástavního práva — el. podání (ČÚZK)", "monthly_amount": 0, "one_time_amount": 1600}
-      ],
-      "conditions": [
-        "Nemovitost musí být pojištěna po celou dobu trvání úvěru"
-      ]
-    },
-    {
-      "principal": 3000000,
+      "principal": 2000000,
       "annual_rate": 4.89,
-      "years": 25,
+      "years": 20,
       "fixation_years": 3,
       "bank_name": "MONETA Money Bank",
       "is_current_bank": false,
@@ -45,9 +38,24 @@
       ]
     },
     {
-      "principal": 3000000,
+      "principal": 2000000,
+      "annual_rate": 4.5,
+      "years": 20,
+      "fixation_years": 5,
+      "bank_name": "Moje banka (nová sazba)",
+      "is_current_bank": true,
+      "additional_costs": [
+        {"name": "Pojištění nemovitosti", "monthly_amount": 200, "one_time_amount": 0}
+      ],
+      "switching_costs": [],
+      "conditions": [
+        "Nemovitost musí být pojištěna po celou dobu trvání úvěru"
+      ]
+    },
+    {
+      "principal": 2000000,
       "annual_rate": 5.09,
-      "years": 25,
+      "years": 20,
       "fixation_years": 7,
       "bank_name": "Komerční banka",
       "is_current_bank": false,

@@ -1,7 +1,6 @@
 """Výpočetní logika hypoteční kalkulačky."""
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -22,16 +21,12 @@ class MortgageParams:
     annual_rate: float  # roční úroková sazba v %
     years: int  # doba splácení v letech
     bank_name: str = ""
-    # Dodatečné náklady
     additional_costs: list[AdditionalCost] = field(default_factory=list)
-    # Poplatky při přechodu k jiné bance (refinancování)
     switching_costs: list[AdditionalCost] = field(default_factory=list)
-    # Je to nabídka od stávající banky? (bez nákladů na přechod)
     is_current_bank: bool = False
-    # Podmínky banky (textové poznámky)
     conditions: list[str] = field(default_factory=list)
-    # Doba fixace v letech (0 = bez fixace / variabilní)
     fixation_years: int = 5
+    bonus: float = 0.0  # jednorázový bonus/odměna od banky (snižuje náklady)
 
     @property
     def months(self) -> int:
@@ -74,7 +69,6 @@ def amortization_schedule(params: MortgageParams) -> list[ScheduleRow]:
     for month in range(1, params.months + 1):
         interest = balance * params.monthly_rate
         principal_part = payment - interest
-        # Poslední splátka — dorovnání zůstatku
         if month == params.months:
             principal_part = balance
             payment = principal_part + interest
@@ -98,13 +92,13 @@ class FixationSummary:
     """Souhrn nákladů za dobu fixace."""
     fixation_years: int
     fixation_months: int
-    paid_in_fixation: float  # splátky za dobu fixace
-    interest_in_fixation: float  # úroky za dobu fixace
-    principal_in_fixation: float  # splacená jistina za dobu fixace
-    additional_costs_in_fixation: float  # poplatky za dobu fixace
-    switching_costs: float  # jednorázové náklady přechodu
-    total_cost_in_fixation: float  # celkové náklady za fixaci
-    remaining_balance: float  # zůstatek na konci fixace
+    paid_in_fixation: float
+    interest_in_fixation: float
+    principal_in_fixation: float
+    additional_costs_in_fixation: float
+    switching_costs: float
+    total_cost_in_fixation: float
+    remaining_balance: float
 
 
 def calculate_fixation_summary(params: MortgageParams) -> FixationSummary:
@@ -129,7 +123,7 @@ def calculate_fixation_summary(params: MortgageParams) -> FixationSummary:
     else:
         switching = sum(c.one_time_amount for c in params.switching_costs)
 
-    total = interest + additional + switching
+    total = interest + additional + switching - params.bonus
 
     return FixationSummary(
         fixation_years=params.fixation_years,
@@ -157,8 +151,9 @@ class MortgageSummary:
     total_interest: float
     total_additional_costs: float
     total_switching_costs: float
-    total_cost: float  # celkové náklady = úroky + poplatky + přechod
-    monthly_total: float  # splátka + měsíční poplatky
+    bonus: float
+    total_cost: float  # úroky + poplatky + přechod − bonus
+    monthly_total: float
     is_current_bank: bool
     fixation: FixationSummary | None = None
 
@@ -177,7 +172,7 @@ def calculate_summary(params: MortgageParams) -> MortgageSummary:
     else:
         total_switching = sum(c.total_over_months(params.months) for c in params.switching_costs)
 
-    total_cost = total_interest + total_additional + total_switching
+    total_cost = total_interest + total_additional + total_switching - params.bonus
 
     fixation = None
     if params.fixation_years > 0:
@@ -194,6 +189,7 @@ def calculate_summary(params: MortgageParams) -> MortgageSummary:
         total_interest=round(total_interest, 2),
         total_additional_costs=round(total_additional, 2),
         total_switching_costs=round(total_switching, 2),
+        bonus=params.bonus,
         total_cost=round(total_cost, 2),
         monthly_total=round(payment + monthly_additional, 2),
         is_current_bank=params.is_current_bank,
@@ -207,14 +203,143 @@ class RefinancingSummary:
     current: MortgageSummary
     new_offer: MortgageSummary
     monthly_saving: float
-    total_saving: float  # kladné = ušetříte, záporné = prodělate
-    fixation_saving: float | None = None  # úspora za dobu fixace nové nabídky
-    common_period_saving: float | None = None  # úspora za společné období (min fixace)
+    total_saving: float
+    fixation_saving: float | None = None
+    common_period_saving: float | None = None
     common_period_months: int | None = None
+    breakeven_month: int | None = None
+
+
+# --- Kumulativní náklady pro grafy ---
+
+@dataclass
+class CumulativeCostRow:
+    """Řádek kumulativních nákladů v čase."""
+    month: int
+    cumulative_interest: float
+    cumulative_additional: float
+    cumulative_switching: float
+    cumulative_total_cost: float
+    remaining_balance: float
+
+
+def cumulative_cost_schedule(params: MortgageParams) -> list[CumulativeCostRow]:
+    """Měsíc po měsíci kumulativní náklady — pro grafy refinancování."""
+    schedule = amortization_schedule(params)
+    monthly_additional = sum(c.monthly_amount for c in params.additional_costs)
+
+    if params.is_current_bank:
+        switching_total = 0.0
+    else:
+        switching_total = sum(c.one_time_amount for c in params.switching_costs)
+
+    cum_additional = sum(c.one_time_amount for c in params.additional_costs)
+    rows = []
+
+    for row in schedule:
+        cum_additional += monthly_additional
+        total = row.cumulative_interest + cum_additional + switching_total - params.bonus
+        rows.append(CumulativeCostRow(
+            month=row.month,
+            cumulative_interest=round(row.cumulative_interest, 2),
+            cumulative_additional=round(cum_additional, 2),
+            cumulative_switching=round(switching_total, 2),
+            cumulative_total_cost=round(total, 2),
+            remaining_balance=row.remaining_balance,
+        ))
+    return rows
+
+
+def find_breakeven_month(current: MortgageParams, new_offer: MortgageParams) -> int | None:
+    """Najde měsíc, kdy se náklady přechodu vrátí díky měsíční úspoře.
+
+    Porovnává měsíc po měsíci: kolik ušetřím na úrocích a poplatcích
+    vs. kolik mě stál přechod (switching costs - bonus).
+    Vrací None pokud se přechod nikdy nezaplatí.
+    """
+    # Jednorázové náklady přechodu (to, co musím "splatit" úsporou)
+    if new_offer.is_current_bank:
+        upfront_cost = -new_offer.bonus  # jen bonus, žádné switching costs
+    else:
+        upfront_cost = (
+            sum(c.one_time_amount for c in new_offer.switching_costs)
+            - new_offer.bonus
+        )
+
+    # Pokud je upfront_cost <= 0 (bonus >= přechod), vyplatí se hned
+    if upfront_cost <= 0:
+        return 0
+
+    # Měsíční úspora = rozdíl v úrocích + rozdíl v měsíčních poplatcích
+    cur_sched = amortization_schedule(current)
+    new_sched = amortization_schedule(new_offer)
+    cur_monthly_fees = sum(c.monthly_amount for c in current.additional_costs)
+    new_monthly_fees = sum(c.monthly_amount for c in new_offer.additional_costs)
+
+    cumulative_saving = 0.0
+    max_months = min(len(cur_sched), len(new_sched))
+
+    for i in range(max_months):
+        # Úspora na úrocích tento měsíc
+        interest_saving = cur_sched[i].interest_part - new_sched[i].interest_part
+        # Úspora na poplatcích tento měsíc
+        fee_saving = cur_monthly_fees - new_monthly_fees
+        cumulative_saving += interest_saving + fee_saving
+
+        if cumulative_saving >= upfront_cost:
+            return i + 1  # měsíc (1-based)
+
+    return None
+
+
+def fixation_comparison_matrix(
+    current: MortgageParams | None,
+    offers: list[MortgageParams],
+) -> list[dict]:
+    """Porovná náklady všech nabídek pro všechny délky fixací.
+
+    Vrací list[dict] kde každý dict je řádek matice:
+    {"fixace": N, "Banka A": náklady, "Banka B": náklady, ...}
+    """
+    # Sesbírat všechny unikátní délky fixace
+    fixation_years_set = set()
+    all_params = list(offers)
+    if current:
+        all_params = [current] + all_params
+        if current.fixation_years > 0:
+            fixation_years_set.add(current.fixation_years)
+
+    for o in offers:
+        if o.fixation_years > 0:
+            fixation_years_set.add(o.fixation_years)
+
+    # Přidat standardní fixace pro úplnost
+    for std in [1, 2, 3, 5, 7, 10]:
+        if any(abs(f - std) <= 1 for f in fixation_years_set):
+            fixation_years_set.add(std)
+
+    fixation_years = sorted(fixation_years_set)
+    if not fixation_years:
+        fixation_years = [3, 5, 7]
+
+    rows = []
+    for fy in fixation_years:
+        months = fy * 12
+        row: dict = {"Fixace (let)": fy}
+        for p in all_params:
+            if months > p.months:
+                continue
+            label = p.bank_name
+            if p.is_current_bank and p is (current if current else None):
+                label += " (stávající)"
+            cost = _cost_over_months(p, months)
+            row[label] = round(cost, 0)
+        rows.append(row)
+    return rows
 
 
 def _cost_over_months(params: MortgageParams, months: int) -> float:
-    """Spočítá celkové náklady (úroky + poplatky + přechod) za daný počet měsíců."""
+    """Spočítá celkové náklady za daný počet měsíců."""
     schedule = amortization_schedule(params)
     rows = schedule[:months]
     interest = rows[-1].cumulative_interest if rows else 0.0
@@ -223,7 +348,7 @@ def _cost_over_months(params: MortgageParams, months: int) -> float:
         switching = 0.0
     else:
         switching = sum(c.one_time_amount for c in params.switching_costs)
-    return interest + additional + switching
+    return interest + additional + switching - params.bonus
 
 
 def compare_refinancing(
@@ -237,14 +362,12 @@ def compare_refinancing(
     monthly_saving = current_summary.monthly_total - new_summary.monthly_total
     total_saving = current_summary.total_cost - new_summary.total_cost
 
-    # Úspora za dobu fixace nové nabídky
     fixation_saving = None
     if new_offer.fixation_years > 0 and new_summary.fixation:
         cur_fix = _cost_over_months(current, new_offer.fixation_years * 12)
         new_fix = new_summary.fixation.total_cost_in_fixation
         fixation_saving = round(cur_fix - new_fix, 2)
 
-    # Srovnání přes společné období (min z obou fixací)
     common_period_saving = None
     common_period_months = None
     cur_fix_y = current.fixation_years or current.years
@@ -257,6 +380,8 @@ def compare_refinancing(
         common_period_saving = round(cur_cost - new_cost, 2)
         common_period_months = common_months
 
+    breakeven = find_breakeven_month(current, new_offer)
+
     return RefinancingSummary(
         current=current_summary,
         new_offer=new_summary,
@@ -265,6 +390,7 @@ def compare_refinancing(
         fixation_saving=fixation_saving,
         common_period_saving=common_period_saving,
         common_period_months=common_period_months,
+        breakeven_month=breakeven,
     )
 
 
@@ -294,3 +420,133 @@ def sensitivity_analysis(
         })
         delta += rate_step
     return results
+
+
+# --- Optimální splátka ---
+
+@dataclass
+class PaymentStrategyResult:
+    """Výsledek simulace jedné platební strategie."""
+    strategy_name: str
+    monthly_mortgage_payment: float
+    monthly_extra: float
+    monthly_investment: float
+    months_to_payoff: int
+    total_interest_paid: float
+    investment_value_at_end: float
+    net_wealth_at_end: float  # investice - zaplacené úroky
+    timeline: list[dict]  # month, mortgage_balance, investment_value, net_wealth
+
+
+def optimal_payment_analysis(
+    params: MortgageParams,
+    total_monthly_budget: float,
+    investment_annual_return: float,
+    inflation_annual: float = 0.0,
+) -> list[PaymentStrategyResult]:
+    """Simuluje různé strategie splácení vs. investování.
+
+    Args:
+        params: Parametry hypotéky
+        total_monthly_budget: Celkový měsíční budget (splátka + investice)
+        investment_annual_return: Očekávaný roční výnos investice v %
+        inflation_annual: Roční inflace v % (pro reálný výnos)
+    """
+    base_payment = monthly_payment(params.principal, params.monthly_rate, params.months)
+    available_extra = max(0, total_monthly_budget - base_payment)
+
+    real_return = investment_annual_return - inflation_annual
+    monthly_inv_rate = real_return / 100 / 12
+
+    # Strategie: 0%, 25%, 50%, 75%, 100% z extra jde na hypotéku
+    strategies = [
+        ("Minimum (vše investovat)", 0.0),
+        ("25 % extra na hypotéku", 0.25),
+        ("50 % extra na hypotéku", 0.50),
+        ("75 % extra na hypotéku", 0.75),
+        ("Maximum (vše na hypotéku)", 1.0),
+    ]
+
+    results = []
+    for name, extra_ratio in strategies:
+        monthly_extra = available_extra * extra_ratio
+        monthly_invest_contrib = available_extra - monthly_extra
+
+        balance = params.principal
+        investment = 0.0
+        total_interest = 0.0
+        months_to_payoff = params.months
+        timeline = []
+
+        for month in range(1, params.months + 1):
+            interest = balance * params.monthly_rate
+            total_interest += interest
+
+            if balance <= 0:
+                # Hypotéka splacena — vše jde do investice
+                investment = investment * (1 + monthly_inv_rate) + total_monthly_budget
+            else:
+                principal_part = base_payment - interest + monthly_extra
+                if principal_part >= balance:
+                    principal_part = balance
+                    months_to_payoff = month
+                    leftover = base_payment + monthly_extra - interest - balance
+                    balance = 0.0
+                    investment = investment * (1 + monthly_inv_rate) + monthly_invest_contrib + leftover
+                else:
+                    balance -= principal_part
+                    investment = investment * (1 + monthly_inv_rate) + monthly_invest_contrib
+
+            net_wealth = investment - total_interest
+
+            if month % 12 == 0 or month == params.months or month == months_to_payoff:
+                timeline.append({
+                    "month": month,
+                    "mortgage_balance": round(max(balance, 0), 0),
+                    "investment_value": round(investment, 0),
+                    "net_wealth": round(net_wealth, 0),
+                    "total_interest": round(total_interest, 0),
+                })
+
+        results.append(PaymentStrategyResult(
+            strategy_name=name,
+            monthly_mortgage_payment=round(base_payment + monthly_extra, 2),
+            monthly_extra=round(monthly_extra, 2),
+            monthly_investment=round(monthly_invest_contrib, 2),
+            months_to_payoff=months_to_payoff,
+            total_interest_paid=round(total_interest, 2),
+            investment_value_at_end=round(investment, 2),
+            net_wealth_at_end=round(investment - total_interest, 2),
+            timeline=timeline,
+        ))
+
+    return results
+
+
+def find_breakeven_investment_rate(
+    params: MortgageParams,
+    total_monthly_budget: float,
+    tolerance: float = 0.01,
+) -> float:
+    """Najde sazbu investice, při které je jedno jestli splácíte navíc nebo investujete.
+
+    Binární vyhledávání: hledá sazbu kde min-payment a max-payment strategie
+    dávají stejný čistý majetek na konci.
+    """
+    lo, hi = 0.0, 30.0
+
+    for _ in range(100):
+        mid = (lo + hi) / 2
+        results = optimal_payment_analysis(params, total_monthly_budget, mid)
+        min_payment_wealth = results[0].net_wealth_at_end  # vše investovat
+        max_payment_wealth = results[-1].net_wealth_at_end  # vše na hypotéku
+
+        if abs(min_payment_wealth - max_payment_wealth) < 100:
+            return round(mid, 2)
+
+        if min_payment_wealth > max_payment_wealth:
+            hi = mid  # investice je moc výhodná, snížit sazbu
+        else:
+            lo = mid  # investice je málo výhodná, zvýšit sazbu
+
+    return round((lo + hi) / 2, 2)
