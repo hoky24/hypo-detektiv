@@ -27,6 +27,7 @@ def params_to_dict(params: MortgageParams) -> dict[str, Any]:
         "conditions": params.conditions,
         "fixation_years": params.fixation_years,
         "bonus": params.bonus,
+        "fixation_end_date": params.fixation_end_date,
     }
 
 
@@ -47,6 +48,7 @@ def dict_to_params(d: dict[str, Any]) -> MortgageParams:
         conditions=d.get("conditions", []),
         fixation_years=d.get("fixation_years", 5),
         bonus=d.get("bonus", 0.0),
+        fixation_end_date=d.get("fixation_end_date", ""),
     )
 
 
@@ -90,7 +92,7 @@ def summaries_to_csv(summaries: list[MortgageSummary]) -> str:
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
-        "Banka", "Jistina", "Sazba %", "Fixace (roky)", "Roky",
+        "Banka", "Jistina", "Sazba %", "RPSN %", "Fixace (roky)", "Roky",
         "Měsíční splátka", "Měsíční celkem",
         "Celkem zaplaceno", "Celkem úroky",
         "Poplatky", "Náklady přechod", "Bonus",
@@ -98,7 +100,7 @@ def summaries_to_csv(summaries: list[MortgageSummary]) -> str:
     ])
     for s in summaries:
         writer.writerow([
-            s.bank_name, s.principal, s.annual_rate, s.fixation_years, s.years,
+            s.bank_name, s.principal, s.annual_rate, s.rpsn, s.fixation_years, s.years,
             s.monthly_payment, s.monthly_total,
             s.total_paid, s.total_interest,
             s.total_additional_costs, s.total_switching_costs, s.bonus,
