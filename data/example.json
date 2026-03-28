@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "offers": [
+    {
+      "principal": 3000000,
+      "annual_rate": 5.29,
+      "years": 25,
+      "fixation_years": 5,
+      "bank_name": "Česká spořitelna",
+      "is_current_bank": false,
+      "additional_costs": [
+        {"name": "Pojištění nemovitosti", "monthly_amount": 200, "one_time_amount": 0},
+        {"name": "Životní pojištění", "monthly_amount": 350, "one_time_amount": 0}
+      ],
+      "switching_costs": [
+        {"name": "Posouzení vhodnosti zástavy (odhad)", "monthly_amount": 0, "one_time_amount": 3000},
+        {"name": "Zápis zástavního práva — el. podání (ČÚZK)", "monthly_amount": 0, "one_time_amount": 1600},
+        {"name": "Výmaz zástavního práva — el. podání (ČÚZK)", "monthly_amount": 0, "one_time_amount": 1600}
+      ],
+      "conditions": [
+        "Nemovitost musí být pojištěna po celou dobu trvání úvěru"
+      ]
+    },
+    {
+      "principal": 3000000,
+      "annual_rate": 4.89,
+      "years": 25,
+      "fixation_years": 3,
+      "bank_name": "MONETA Money Bank",
+      "is_current_bank": false,
+      "additional_costs": [
+        {"name": "Pojištění nemovitosti", "monthly_amount": 180, "one_time_amount": 0}
+      ],
+      "switching_costs": [
+        {"name": "Posouzení vhodnosti zástavy (odhad)", "monthly_amount": 0, "one_time_amount": 3000},
+        {"name": "Zápis zástavního práva — el. podání (ČÚZK)", "monthly_amount": 0, "one_time_amount": 1600},
+        {"name": "Zpracování el. podpisů zástavní smlouvy", "monthly_amount": 0, "one_time_amount": 400},
+        {"name": "Ověření podpisu na zástavní smlouvě", "monthly_amount": 0, "one_time_amount": 50},
+        {"name": "Výmaz zástavního práva — el. podání (ČÚZK)", "monthly_amount": 0, "one_time_amount": 1600}
+      ],
+      "conditions": [
+        "Splácení z běžného účtu u MONETA, min. kreditní příjem 15 000 Kč/měsíc",
+        "Nemovitost musí být pojištěna po celou dobu trvání úvěru",
+        "Při nedodržení podmínek může banka zvýšit úrokovou sazbu"
+      ]
+    },
+    {
+      "principal": 3000000,
+      "annual_rate": 5.09,
+      "years": 25,
+      "fixation_years": 7,
+      "bank_name": "Komerční banka",
+      "is_current_bank": false,
+      "additional_costs": [
+        {"name": "Pojištění nemovitosti", "monthly_amount": 220, "one_time_amount": 0},
+        {"name": "Poplatek za vedení účtu", "monthly_amount": 100, "one_time_amount": 0}
+      ],
+      "switching_costs": [
+        {"name": "Posouzení vhodnosti zástavy (odhad)", "monthly_amount": 0, "one_time_amount": 3000},
+        {"name": "Zápis zástavního práva — el. podání (ČÚZK)", "monthly_amount": 0, "one_time_amount": 1600},
+        {"name": "Výmaz zástavního práva — el. podání (ČÚZK)", "monthly_amount": 0, "one_time_amount": 1600}
+      ],
+      "conditions": [
+        "Nemovitost musí být pojištěna po celou dobu trvání úvěru"
+      ]
+    }
+  ]
+}
