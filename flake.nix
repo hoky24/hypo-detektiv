@@ -1,5 +1,5 @@
 {
-  description = "Hypoteční kalkulačka";
+  description = "HypoDetektiv — srovnání hypoték při refinancování";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -20,14 +20,14 @@
         ]);
       in
       {
-        packages.default = pkgs.writeShellScriptBin "hypotecni-kalkulacka" ''
+        packages.default = pkgs.writeShellScriptBin "hypodetektiv" ''
           cd ${self}
           ${pythonEnv}/bin/streamlit run app.py --server.headless true "$@"
         '';
 
         apps.default = {
           type = "app";
-          program = "${self.packages.${system}.default}/bin/hypotecni-kalkulacka";
+          program = "${self.packages.${system}.default}/bin/hypodetektiv";
         };
 
         devShells.default = pkgs.mkShell {
@@ -35,7 +35,7 @@
             pythonEnv
           ];
           shellHook = ''
-            echo "Hypoteční kalkulačka — vývojové prostředí"
+            echo "HypoDetektiv — vývojové prostředí"
             echo "Spuštění: streamlit run app.py"
           '';
         };

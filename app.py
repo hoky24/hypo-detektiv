@@ -1,4 +1,4 @@
-"""Hypoteční kalkulačka — Streamlit aplikace."""
+"""HypoDetektiv — Streamlit aplikace."""
 
 import datetime
 import streamlit as st
@@ -25,8 +25,8 @@ from mortgage import (
 )
 from data_io import export_json, import_json, import_bank_csv, summaries_to_csv
 
-st.set_page_config(page_title="Hypoteční kalkulačka", page_icon="🏠", layout="wide")
-st.title("Hypoteční kalkulačka")
+st.set_page_config(page_title="HypoDetektiv", page_icon="🔍", layout="wide")
+st.title("🔍 HypoDetektiv")
 
 
 # ============================================================
