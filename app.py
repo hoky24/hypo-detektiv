@@ -104,6 +104,11 @@ if "_pending_csv" in st.session_state:
     if _cur.get("remaining_years"):
         st.session_state["cur_years"] = _cur["remaining_years"]
 
+    # Datum konce fixace = konec prvního období
+    if _periods:
+        _first_p = _periods[0]
+        st.session_state["cur_fix_date"] = _first_p["last_date"]
+
     # Zajistit checkbox "Mám stávající hypotéku"
     st.session_state["has_current"] = True
     st.session_state["cur_bank"] = "ČSOB"
