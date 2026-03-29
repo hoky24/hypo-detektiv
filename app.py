@@ -25,7 +25,10 @@ from mortgage import (
 )
 from data_io import export_json, import_json, import_bank_csv, summaries_to_csv
 
-st.set_page_config(page_title="HypoDetektiv", page_icon="🔍", layout="wide")
+import pathlib as _pathlib
+_logo_path = _pathlib.Path(__file__).parent / "logo.svg"
+_logo_svg = _logo_path.read_text() if _logo_path.exists() else "🔍"
+st.set_page_config(page_title="HypoDetektiv", page_icon=_logo_svg, layout="wide")
 st.title("🔍 HypoDetektiv")
 
 
