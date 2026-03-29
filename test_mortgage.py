@@ -5,23 +5,27 @@ import unittest
 
 from mortgage import (
     AdditionalCost,
+    FixationPeriod,
     MortgageParams,
     monthly_payment,
     amortization_schedule,
     calculate_rpsn,
     calculate_fixation_summary,
     calculate_summary,
+    combined_timeline,
     compare_refinancing,
     cumulative_cost_schedule,
     find_breakeven_month,
     generate_verdict,
+    historical_amortization_schedule,
     sensitivity_analysis,
     optimal_payment_analysis,
     find_breakeven_investment_rate,
+    validate_mortgage_history,
     _cost_over_months,
     fixation_comparison_matrix,
 )
-from data_io import params_to_dict, dict_to_params, export_json, import_json, summaries_to_csv
+from data_io import params_to_dict, dict_to_params, export_json, import_json, import_bank_csv, summaries_to_csv
 
 
 # ============================================================
@@ -552,6 +556,231 @@ class TestAdditionalCost(unittest.TestCase):
     def test_total_over_months_combined(self):
         c = AdditionalCost("Mix", monthly_amount=100, one_time_amount=500)
         self.assertEqual(c.total_over_months(10), 1500)
+
+
+# ============================================================
+# Historie hypotéky
+# ============================================================
+
+class TestHistoricalSchedule(unittest.TestCase):
+    def _fixations(self):
+        return [
+            FixationPeriod(annual_rate=2.5, duration_months=60),   # 5 let
+            FixationPeriod(annual_rate=5.5, duration_months=36),   # 3 roky
+        ]
+
+    def test_length(self):
+        rows = historical_amortization_schedule(2_000_000, 20, self._fixations())
+        self.assertEqual(len(rows), 96)  # 60 + 36
+
+    def test_balance_decreasing(self):
+        rows = historical_amortization_schedule(2_000_000, 20, self._fixations())
+        for i in range(len(rows) - 1):
+            self.assertGreaterEqual(rows[i].remaining_balance, rows[i + 1].remaining_balance)
+
+    def test_all_past(self):
+        rows = historical_amortization_schedule(2_000_000, 20, self._fixations())
+        self.assertTrue(all(r.is_past for r in rows))
+
+    def test_month_numbering(self):
+        rows = historical_amortization_schedule(2_000_000, 20, self._fixations())
+        months = [r.month for r in rows]
+        self.assertEqual(months, list(range(1, 97)))
+
+    def test_cumulative_principal_positive(self):
+        rows = historical_amortization_schedule(2_000_000, 20, self._fixations())
+        self.assertGreater(rows[-1].cumulative_principal, 0)
+
+    def test_balance_less_than_original(self):
+        rows = historical_amortization_schedule(2_000_000, 20, self._fixations())
+        self.assertLess(rows[-1].remaining_balance, 2_000_000)
+
+    def test_fixation_labels(self):
+        rows = historical_amortization_schedule(2_000_000, 20, self._fixations())
+        labels = set(r.fixation_label for r in rows)
+        self.assertEqual(len(labels), 2)
+
+    def test_payment_changes_between_fixations(self):
+        """Splátka se změní při nové fixaci (jiná sazba)."""
+        rows = historical_amortization_schedule(2_000_000, 20, self._fixations())
+        pmt_fix1 = rows[0].payment
+        pmt_fix2 = rows[60].payment
+        self.assertNotAlmostEqual(pmt_fix1, pmt_fix2, delta=1.0)
+
+    def test_single_fixation(self):
+        rows = historical_amortization_schedule(
+            1_000_000, 10, [FixationPeriod(3.0, 24)])
+        self.assertEqual(len(rows), 24)
+
+    def test_empty_fixations(self):
+        rows = historical_amortization_schedule(1_000_000, 10, [])
+        self.assertEqual(len(rows), 0)
+
+
+class TestValidateMortgageHistory(unittest.TestCase):
+    def test_no_history(self):
+        p = _params()
+        ok, msg = validate_mortgage_history(p)
+        self.assertTrue(ok)
+
+    def test_matching_balance(self):
+        """Historie by měla odpovídat zbývající jistině."""
+        # Spočítáme zbývající jistinu po 60 měsících fixace 2.5%
+        rows = historical_amortization_schedule(
+            2_000_000, 20, [FixationPeriod(2.5, 60)])
+        remaining = rows[-1].remaining_balance
+
+        p = _params(
+            principal=remaining, years=15, rate=5.5,
+            additional_costs=[], switching_costs=[])
+        p = MortgageParams(
+            principal=remaining, annual_rate=5.5, years=15,
+            original_principal=2_000_000, original_term_years=20,
+            past_fixations=[FixationPeriod(2.5, 60)])
+        ok, msg = validate_mortgage_history(p)
+        self.assertTrue(ok)
+
+    def test_mismatched_balance(self):
+        p = MortgageParams(
+            principal=500_000, annual_rate=5.5, years=15,
+            original_principal=2_000_000, original_term_years=20,
+            past_fixations=[FixationPeriod(2.5, 60)])
+        ok, msg = validate_mortgage_history(p)
+        self.assertFalse(ok)
+
+
+class TestCombinedTimeline(unittest.TestCase):
+    def test_past_plus_future(self):
+        current = MortgageParams(
+            principal=1_500_000, annual_rate=5.5, years=15,
+            original_principal=2_000_000, original_term_years=20,
+            past_fixations=[FixationPeriod(2.5, 60)],
+            is_current_bank=True)
+        future = _params(principal=1_500_000, rate=3.99, years=15, bank="Nová")
+        tl = combined_timeline(current, future)
+        past = [r for r in tl if r.is_past]
+        fut = [r for r in tl if not r.is_past]
+        self.assertEqual(len(past), 60)
+        self.assertEqual(len(fut), 180)
+
+    def test_month_continuity(self):
+        current = MortgageParams(
+            principal=1_500_000, annual_rate=5.5, years=15,
+            original_principal=2_000_000, original_term_years=20,
+            past_fixations=[FixationPeriod(2.5, 60)],
+            is_current_bank=True)
+        future = _params(principal=1_500_000, rate=3.99, years=15, bank="Nová")
+        tl = combined_timeline(current, future)
+        months = [r.month for r in tl]
+        self.assertEqual(months, list(range(1, len(tl) + 1)))
+
+    def test_cumulative_interest_continuous(self):
+        current = MortgageParams(
+            principal=1_500_000, annual_rate=5.5, years=15,
+            original_principal=2_000_000, original_term_years=20,
+            past_fixations=[FixationPeriod(2.5, 60)],
+            is_current_bank=True)
+        future = _params(principal=1_500_000, rate=3.99, years=15, bank="Nová")
+        tl = combined_timeline(current, future)
+        # Kumulativní úroky by neměly klesnout na hranici minulost/budoucnost
+        past_last = [r for r in tl if r.is_past][-1]
+        fut_first = [r for r in tl if not r.is_past][0]
+        self.assertGreater(fut_first.cumulative_interest, past_last.cumulative_interest)
+
+    def test_no_history(self):
+        """Bez historie — jen budoucí řádky."""
+        current = _params(principal=2_000_000, rate=5.5, years=20, is_current=True)
+        future = _params(principal=2_000_000, rate=3.99, years=20, bank="Nová")
+        tl = combined_timeline(current, future)
+        self.assertTrue(all(not r.is_past for r in tl))
+        self.assertEqual(len(tl), 240)
+
+
+class TestBankCSVImport(unittest.TestCase):
+    SAMPLE_CSV = """\
+Datum;Čerpání Kč;Mimořádná splátka Kč;Sazba % p. a.;Splátka Kč;Úrok Kč;Jistina Kč;Nesplacená jistina Kč
+24. 2. 2017;800 000;;1.690;;;;800 000
+25. 2. 2017;;;1.690;37,56;37,56;0;800 000
+25. 3. 2017;;;1.690;1 126,80;1 126,80;0;800 000
+25. 4. 2017;;;1.690;1 126,80;1 126,80;0;800 000
+11. 6. 2018;750 000;;1.690;;;;1 550 000
+20. 6. 2018;340 000;;1.690;;;;1 890 000
+25. 6. 2018;;;1.690;1 699,45;1 699,45;0;1 890 000
+25. 7. 2018;;;1.690;6 696,50;2 661,90;4 034,60;1 885 965,40
+25. 8. 2018;;;1.690;6 696,50;2 656,20;4 040,30;1 881 925,10
+"""
+
+    def test_parse_rows(self):
+        rows = import_bank_csv(self.SAMPLE_CSV)
+        # 3 interest-only + 1 interest after last drawdown + 2 regular = 6
+        self.assertEqual(len(rows), 6)
+
+    def test_drawdowns_skipped(self):
+        rows = import_bank_csv(self.SAMPLE_CSV)
+        # No row should have is_past=False
+        self.assertTrue(all(r.is_past for r in rows))
+
+    def test_balance_decreasing_after_drawdown(self):
+        rows = import_bank_csv(self.SAMPLE_CSV)
+        # After all drawdowns, balance should decrease
+        regular = [r for r in rows if r.principal_part > 0]
+        if len(regular) >= 2:
+            self.assertGreater(regular[0].remaining_balance, regular[-1].remaining_balance)
+
+    def test_cumulative_interest(self):
+        rows = import_bank_csv(self.SAMPLE_CSV)
+        total = sum(r.interest_part for r in rows)
+        self.assertAlmostEqual(rows[-1].cumulative_interest, total, delta=0.01)
+
+    def test_fixation_label(self):
+        rows = import_bank_csv(self.SAMPLE_CSV)
+        self.assertIn("1.69", rows[0].fixation_label)
+
+    def test_czech_number_parsing(self):
+        """Čísla s mezerami a čárkou se správně parsují."""
+        rows = import_bank_csv(self.SAMPLE_CSV)
+        regular = [r for r in rows if r.payment > 6000]
+        self.assertGreater(len(regular), 0)
+        self.assertAlmostEqual(regular[0].payment, 6696.50, delta=0.01)
+
+    def test_bytes_windows1250(self):
+        encoded = self.SAMPLE_CSV.encode("windows-1250")
+        rows = import_bank_csv(encoded)
+        self.assertGreater(len(rows), 0)
+
+    def test_bytes_utf8(self):
+        encoded = self.SAMPLE_CSV.encode("utf-8")
+        rows = import_bank_csv(encoded, encoding="utf-8")
+        self.assertGreater(len(rows), 0)
+
+
+class TestDataIOHistory(unittest.TestCase):
+    def test_roundtrip_with_history(self):
+        p = MortgageParams(
+            principal=1_500_000, annual_rate=5.5, years=15,
+            bank_name="Test", original_principal=2_000_000,
+            original_term_years=20, start_date="2021-06-15",
+            past_fixations=[
+                FixationPeriod(2.5, 60),
+                FixationPeriod(5.5, 36),
+            ])
+        d = params_to_dict(p)
+        p2 = dict_to_params(d)
+        self.assertAlmostEqual(p2.original_principal, 2_000_000)
+        self.assertEqual(p2.original_term_years, 20)
+        self.assertEqual(p2.start_date, "2021-06-15")
+        self.assertEqual(len(p2.past_fixations), 2)
+        self.assertEqual(p2.past_fixations[0].duration_months, 60)
+        self.assertAlmostEqual(p2.past_fixations[1].annual_rate, 5.5)
+
+    def test_backward_compat_no_history(self):
+        """Import bez historie — výchozí hodnoty."""
+        d = {"principal": 1_000_000, "annual_rate": 4.0, "years": 20,
+             "bank_name": "X", "additional_costs": [], "switching_costs": [],
+             "is_current_bank": False, "fixation_years": 5, "bonus": 0}
+        p = dict_to_params(d)
+        self.assertEqual(p.original_principal, 0.0)
+        self.assertEqual(p.past_fixations, [])
 
 
 if __name__ == "__main__":

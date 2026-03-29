@@ -5,7 +5,10 @@ import csv
 import io
 from typing import Any
 
-from mortgage import MortgageParams, AdditionalCost, MortgageSummary
+import datetime
+import re
+
+from mortgage import MortgageParams, AdditionalCost, FixationPeriod, MortgageSummary, TimelineRow
 
 
 def params_to_dict(params: MortgageParams) -> dict[str, Any]:
@@ -28,6 +31,13 @@ def params_to_dict(params: MortgageParams) -> dict[str, Any]:
         "fixation_years": params.fixation_years,
         "bonus": params.bonus,
         "fixation_end_date": params.fixation_end_date,
+        "original_principal": params.original_principal,
+        "original_term_years": params.original_term_years,
+        "start_date": params.start_date,
+        "past_fixations": [
+            {"annual_rate": f.annual_rate, "duration_months": f.duration_months}
+            for f in params.past_fixations
+        ],
     }
 
 
@@ -49,6 +59,12 @@ def dict_to_params(d: dict[str, Any]) -> MortgageParams:
         fixation_years=d.get("fixation_years", 5),
         bonus=d.get("bonus", 0.0),
         fixation_end_date=d.get("fixation_end_date", ""),
+        original_principal=d.get("original_principal", 0.0),
+        original_term_years=d.get("original_term_years", 0),
+        start_date=d.get("start_date", ""),
+        past_fixations=[
+            FixationPeriod(**f) for f in d.get("past_fixations", [])
+        ],
     )
 
 
@@ -85,6 +101,142 @@ def import_json(json_str: str) -> dict[str, Any]:
         return result
     else:
         raise ValueError(f"Nepodporovaná verze formátu: {version}")
+
+
+def _parse_czech_number(s: str) -> float:
+    """Převede české číslo ('1 126,80') na float."""
+    s = s.strip()
+    if not s:
+        return 0.0
+    s = s.replace('\xa0', '').replace(' ', '').replace(',', '.')
+    return float(s)
+
+
+def _parse_czech_date(s: str) -> datetime.date:
+    """Převede české datum ('25. 6. 2018') na date."""
+    s = s.strip().rstrip('.')
+    parts = re.split(r'[.\s]+', s)
+    parts = [p for p in parts if p]
+    if len(parts) == 3:
+        return datetime.date(int(parts[2]), int(parts[1]), int(parts[0]))
+    raise ValueError(f"Neplatný formát data: {s}")
+
+
+def import_bank_csv(content: bytes | str, encoding: str = "windows-1250") -> list[TimelineRow]:
+    """Importuje splátkový kalendář z CSV exportu banky (ČSOB formát).
+
+    Formát: Datum;Čerpání Kč;Mimořádná splátka Kč;Sazba % p.a.;Splátka Kč;Úrok Kč;Jistina Kč;Nesplacená jistina Kč
+
+    Podporuje postupné čerpání a úrokové období (bez splácení jistiny).
+    """
+    if isinstance(content, bytes):
+        # Zkusit zadané kódování, fallback na utf-8
+        for enc in [encoding, "utf-8", "utf-8-sig", "latin-1"]:
+            try:
+                text = content.decode(enc)
+                break
+            except (UnicodeDecodeError, LookupError):
+                continue
+        else:
+            text = content.decode("utf-8", errors="replace")
+    else:
+        text = content
+
+    reader = csv.reader(io.StringIO(text), delimiter=';')
+
+    # Najít řádek s hlavičkou
+    header = None
+    for row in reader:
+        if any("datum" in c.lower() for c in row):
+            header = [c.strip() for c in row]
+            break
+    if not header:
+        raise ValueError("CSV neobsahuje rozpoznatelnou hlavičku.")
+
+    # Mapování sloupců (flexibilní)
+    col_map: dict[str, int] = {}
+    for i, h in enumerate(header):
+        hl = h.lower()
+        if "datum" in hl:
+            col_map["datum"] = i
+        elif "čerpání" in hl or "cerpani" in hl:
+            col_map["cerpani"] = i
+        elif "mimořádná" in hl or "mimoradna" in hl:
+            col_map["mimoradna"] = i
+        elif "sazba" in hl:
+            col_map["sazba"] = i
+        elif "splátka" in hl or "splatka" in hl:
+            col_map["splatka"] = i
+        elif "úrok" in hl or "urok" in hl:
+            col_map["urok"] = i
+        elif "jistina" in hl and "nesplacen" not in hl:
+            col_map["jistina"] = i
+        elif "nesplacen" in hl:
+            col_map["zustatek"] = i
+
+    if "datum" not in col_map:
+        raise ValueError("CSV neobsahuje sloupec 'Datum'.")
+
+    rows: list[TimelineRow] = []
+    cum_interest = 0.0
+    cum_principal = 0.0
+    month = 0
+    last_rate = 0.0
+
+    for row in reader:
+        if not row or len(row) <= col_map["datum"]:
+            continue
+        date_str = row[col_map["datum"]].strip()
+        if not date_str:
+            continue
+
+        try:
+            _parse_czech_date(date_str)
+        except ValueError:
+            continue
+
+        # Čerpání — přeskočit (jen info řádek)
+        cerpani = _parse_czech_number(row[col_map.get("cerpani", 0)]) if "cerpani" in col_map and col_map["cerpani"] < len(row) else 0.0
+        if cerpani > 0:
+            # Zaznamenat zůstatek po čerpání
+            zustatek = _parse_czech_number(row[col_map.get("zustatek", 0)]) if "zustatek" in col_map and col_map["zustatek"] < len(row) else 0.0
+            sazba = _parse_czech_number(row[col_map.get("sazba", 0)]) if "sazba" in col_map and col_map["sazba"] < len(row) else last_rate
+            if sazba > 0:
+                last_rate = sazba
+            continue
+
+        # Splátka
+        splatka = _parse_czech_number(row[col_map.get("splatka", 0)]) if "splatka" in col_map and col_map["splatka"] < len(row) else 0.0
+        urok = _parse_czech_number(row[col_map.get("urok", 0)]) if "urok" in col_map and col_map["urok"] < len(row) else 0.0
+        jistina = _parse_czech_number(row[col_map.get("jistina", 0)]) if "jistina" in col_map and col_map["jistina"] < len(row) else 0.0
+        zustatek = _parse_czech_number(row[col_map.get("zustatek", 0)]) if "zustatek" in col_map and col_map["zustatek"] < len(row) else 0.0
+        sazba = _parse_czech_number(row[col_map.get("sazba", 0)]) if "sazba" in col_map and col_map["sazba"] < len(row) else last_rate
+
+        if sazba > 0:
+            last_rate = sazba
+
+        if splatka == 0 and urok == 0:
+            continue
+
+        month += 1
+        cum_interest += urok
+        cum_principal += jistina
+
+        label = f"Fixace ({sazba:.2f} %)" if sazba > 0 else "Fixace"
+
+        rows.append(TimelineRow(
+            month=month,
+            payment=round(splatka, 2),
+            principal_part=round(jistina, 2),
+            interest_part=round(urok, 2),
+            remaining_balance=round(zustatek, 2),
+            cumulative_interest=round(cum_interest, 2),
+            cumulative_principal=round(cum_principal, 2),
+            is_past=True,
+            fixation_label=label,
+        ))
+
+    return rows
 
 
 def summaries_to_csv(summaries: list[MortgageSummary]) -> str:

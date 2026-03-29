@@ -15,6 +15,13 @@ class AdditionalCost:
 
 
 @dataclass
+class FixationPeriod:
+    """Jedna historická fixace."""
+    annual_rate: float      # sazba v %
+    duration_months: int    # délka v měsících
+
+
+@dataclass
 class MortgageParams:
     """Parametry hypotéky."""
     principal: float
@@ -28,6 +35,11 @@ class MortgageParams:
     fixation_years: int = 5
     bonus: float = 0.0
     fixation_end_date: str = ""  # ISO formát "YYYY-MM-DD", volitelné
+    # Historie hypotéky (volitelné)
+    original_principal: float = 0.0
+    original_term_years: int = 0
+    start_date: str = ""  # ISO "YYYY-MM-DD"
+    past_fixations: list[FixationPeriod] = field(default_factory=list)
 
     @property
     def months(self) -> int:
@@ -659,3 +671,133 @@ def find_breakeven_investment_rate(
             lo = mid
 
     return round((lo + hi) / 2, 2)
+
+
+# --- Historie hypotéky ---
+
+@dataclass
+class TimelineRow:
+    """Řádek celkového průběhu hypotéky (minulost i budoucnost)."""
+    month: int
+    payment: float
+    principal_part: float
+    interest_part: float
+    remaining_balance: float
+    cumulative_interest: float
+    cumulative_principal: float
+    is_past: bool
+    fixation_label: str
+
+
+def historical_amortization_schedule(
+    original_principal: float,
+    original_term_years: int,
+    past_fixations: list[FixationPeriod],
+) -> list[TimelineRow]:
+    """Rekonstruuje splátkový kalendář z historie fixací."""
+    balance = original_principal
+    total_months = original_term_years * 12
+    remaining_months = total_months
+    cum_interest = 0.0
+    cum_principal = 0.0
+    rows: list[TimelineRow] = []
+    month = 0
+
+    for fix_idx, fix in enumerate(past_fixations):
+        mr = fix.annual_rate / 100 / 12
+        pmt = monthly_payment(balance, mr, remaining_months)
+        label = f"Fixace {fix_idx + 1} ({fix.annual_rate:.2f} %)"
+
+        for _ in range(fix.duration_months):
+            if balance <= 0 or remaining_months <= 0:
+                break
+            month += 1
+            interest = balance * mr
+            principal_part = pmt - interest
+            if remaining_months == 1 or principal_part > balance:
+                principal_part = balance
+                pmt = principal_part + interest
+            balance -= principal_part
+            cum_interest += interest
+            cum_principal += principal_part
+            remaining_months -= 1
+            rows.append(TimelineRow(
+                month=month,
+                payment=round(pmt, 2),
+                principal_part=round(principal_part, 2),
+                interest_part=round(interest, 2),
+                remaining_balance=round(max(balance, 0), 2),
+                cumulative_interest=round(cum_interest, 2),
+                cumulative_principal=round(cum_principal, 2),
+                is_past=True,
+                fixation_label=label,
+            ))
+    return rows
+
+
+def validate_mortgage_history(params: MortgageParams) -> tuple[bool, str]:
+    """Ověří, zda historie fixací odpovídá zbývající jistině.
+
+    Vrací (is_ok, message).
+    """
+    if not params.past_fixations or params.original_principal <= 0:
+        return True, ""
+
+    rows = historical_amortization_schedule(
+        params.original_principal, params.original_term_years, params.past_fixations)
+    if not rows:
+        return True, ""
+
+    computed_balance = rows[-1].remaining_balance
+    diff = abs(computed_balance - params.principal)
+    pct = diff / params.principal * 100 if params.principal > 0 else 0
+
+    if pct <= 5:
+        return True, (
+            f"Zbývající jistina z historie: {computed_balance:,.0f} Kč "
+            f"(zadáno {params.principal:,.0f} Kč) — OK."
+        )
+    return False, (
+        f"Zbývající jistina z historie ({computed_balance:,.0f} Kč) "
+        f"se liší od zadané ({params.principal:,.0f} Kč) o {pct:.1f} %. "
+        f"Zkontrolujte vstupní údaje."
+    )
+
+
+def combined_timeline(
+    current: MortgageParams,
+    future: MortgageParams,
+) -> list[TimelineRow]:
+    """Spojí historický a budoucí splátkový kalendář."""
+    past_rows: list[TimelineRow] = []
+
+    if current.past_fixations and current.original_principal > 0:
+        past_rows = historical_amortization_schedule(
+            current.original_principal,
+            current.original_term_years,
+            current.past_fixations,
+        )
+
+    # Budoucí splátky
+    future_schedule = amortization_schedule(future)
+    month_offset = past_rows[-1].month if past_rows else 0
+    cum_interest_offset = past_rows[-1].cumulative_interest if past_rows else 0.0
+    cum_principal_offset = past_rows[-1].cumulative_principal if past_rows else 0.0
+
+    label = f"{future.bank_name} ({future.annual_rate:.2f} %)" if future.bank_name else f"Nová nabídka ({future.annual_rate:.2f} %)"
+
+    future_rows = []
+    for row in future_schedule:
+        future_rows.append(TimelineRow(
+            month=month_offset + row.month,
+            payment=row.payment,
+            principal_part=row.principal_part,
+            interest_part=row.interest_part,
+            remaining_balance=row.remaining_balance,
+            cumulative_interest=round(cum_interest_offset + row.cumulative_interest, 2),
+            cumulative_principal=round(cum_principal_offset + row.cumulative_principal, 2),
+            is_past=False,
+            fixation_label=label,
+        ))
+
+    return past_rows + future_rows

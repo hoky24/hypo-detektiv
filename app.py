@@ -9,8 +9,10 @@ import plotly.graph_objects as go
 from mortgage import (
     MortgageParams,
     AdditionalCost,
+    FixationPeriod,
     amortization_schedule,
     calculate_summary,
+    combined_timeline,
     compare_refinancing,
     cumulative_cost_schedule,
     fixation_comparison_matrix,
@@ -19,8 +21,9 @@ from mortgage import (
     sensitivity_analysis,
     optimal_payment_analysis,
     find_breakeven_investment_rate,
+    validate_mortgage_history,
 )
-from data_io import export_json, import_json, summaries_to_csv
+from data_io import export_json, import_json, import_bank_csv, summaries_to_csv
 
 st.set_page_config(page_title="Hypoteční kalkulačka", page_icon="🏠", layout="wide")
 st.title("Hypoteční kalkulačka")
@@ -47,6 +50,15 @@ def _populate_widget_keys(current_mortgage, offers_list):
         st.session_state["cur_fix"] = current_mortgage.fixation_years
         if current_mortgage.fixation_end_date:
             st.session_state["cur_fix_date"] = datetime.date.fromisoformat(current_mortgage.fixation_end_date)
+        if current_mortgage.original_principal > 0:
+            st.session_state["cur_orig_principal"] = current_mortgage.original_principal
+            st.session_state["cur_orig_years"] = current_mortgage.original_term_years
+            if current_mortgage.start_date:
+                st.session_state["cur_start_date"] = datetime.date.fromisoformat(current_mortgage.start_date)
+            st.session_state["cur_n_past_fix"] = len(current_mortgage.past_fixations)
+            for j, fp in enumerate(current_mortgage.past_fixations):
+                st.session_state[f"cur_pf_{j}_rate"] = fp.annual_rate
+                st.session_state[f"cur_pf_{j}_years"] = fp.duration_months // 12
     else:
         st.session_state["has_current"] = False
     st.session_state["n_offers"] = len(offers_list)
@@ -208,6 +220,29 @@ with st.expander("Vstupní data", expanded=not st.session_state.offers):
         with st.expander("Poplatky stávající hypotéky"):
             cur_costs = render_additional_costs("cur_ac", "Stávající poplatky/pojištění")
 
+        # Historie hypotéky — import CSV z banky
+        with st.expander("Historie hypotéky (volitelné)"):
+            st.caption("Nahrajte CSV splátkového kalendáře z banky pro zobrazení celého průběhu.")
+            csv_file = st.file_uploader(
+                "CSV splátkový kalendář", type=["csv"],
+                key="cur_history_csv",
+                help="Formát ČSOB: Datum;Čerpání;Sazba;Splátka;Úrok;Jistina;Nesplacená jistina (kódování Windows-1250 nebo UTF-8)")
+
+            if csv_file is not None:
+                try:
+                    history_rows = import_bank_csv(csv_file.read())
+                    st.session_state["_past_schedule"] = history_rows
+                    st.success(f"Načteno {len(history_rows)} měsíců historie.")
+                except Exception as e:
+                    st.error(f"Chyba při importu CSV: {e}")
+
+            if st.session_state.get("_past_schedule"):
+                rows = st.session_state["_past_schedule"]
+                st.caption(
+                    f"Historie: {len(rows)} měsíců, "
+                    f"zůstatek {rows[-1].remaining_balance:,.0f} Kč, "
+                    f"zaplaceno úroky {rows[-1].cumulative_interest:,.0f} Kč")
+
         st.session_state.current_mortgage = MortgageParams(
             principal=cur_principal, annual_rate=cur_rate, years=cur_years,
             bank_name=cur_bank, additional_costs=cur_costs,
@@ -275,7 +310,7 @@ if not offers:
 
 summaries = [calculate_summary(p) for p in offers]
 
-tab_names = ["Srovnání nabídek", "Detail nabídky", "Citlivostní analýza", "Optimální splátka", "Export / Import"]
+tab_names = ["Srovnání nabídek", "Detail nabídky", "Časová osa", "Citlivostní analýza", "Optimální splátka", "Export / Import"]
 _tab = dict(zip(tab_names, st.tabs(tab_names)))
 
 
@@ -468,7 +503,128 @@ with _tab["Detail nabídky"]:
 
 
 # ──────────────────────────────────────────────────────────────
-# TAB 3: CITLIVOSTNÍ ANALÝZA
+# TAB 3: ČASOVÁ OSA
+# ──────────────────────────────────────────────────────────────
+with _tab["Časová osa"]:
+    st.header("Průběh hypotéky v čase")
+
+    past_schedule = st.session_state.get("_past_schedule", [])
+
+    if not past_schedule:
+        st.info(
+            "Pro zobrazení časové osy nahrajte CSV splátkový kalendář z banky "
+            "v sekci **Stávající hypotéka → Historie hypotéky**."
+        )
+    elif not offers:
+        st.info("Zadejte alespoň jednu nabídku pro porovnání.")
+    else:
+        # Výběr nabídky pro budoucnost
+        tl_opts = [s.bank_name for s in summaries]
+        tl_sel = st.selectbox("Budoucí nabídka", tl_opts, key="tl_offer")
+        tl_idx = tl_opts.index(tl_sel)
+        tl_future_params = offers[tl_idx]
+
+        # Budoucí splátky
+        future_schedule = amortization_schedule(tl_future_params)
+        month_offset = past_schedule[-1].month
+        cum_interest_offset = past_schedule[-1].cumulative_interest
+        cum_principal_offset = past_schedule[-1].cumulative_principal
+
+        label = f"{tl_future_params.bank_name} ({tl_future_params.annual_rate:.2f} %)"
+        from mortgage import TimelineRow as _TLR
+        future_rows = []
+        for row in future_schedule:
+            future_rows.append(_TLR(
+                month=month_offset + row.month,
+                payment=row.payment,
+                principal_part=row.principal_part,
+                interest_part=row.interest_part,
+                remaining_balance=row.remaining_balance,
+                cumulative_interest=round(cum_interest_offset + row.cumulative_interest, 2),
+                cumulative_principal=round(cum_principal_offset + row.cumulative_principal, 2),
+                is_past=False,
+                fixation_label=label,
+            ))
+
+        timeline = past_schedule + future_rows
+
+        # Data pro grafy
+        tl_data = []
+        for row in timeline:
+            tl_data.append({
+                "Měsíc": row.month,
+                "Zůstatek": row.remaining_balance,
+                "Splátka": row.payment,
+                "Úrok": row.interest_part,
+                "Jistina": row.principal_part,
+                "Kum. úroky": row.cumulative_interest,
+                "Fixace": row.fixation_label,
+                "Období": "Minulost" if row.is_past else "Budoucnost",
+            })
+
+        df_tl = pd.DataFrame(tl_data)
+        now_month = past_schedule[-1].month
+
+        # Graf zůstatku
+        fig_bal = px.area(
+            df_tl, x="Měsíc", y="Zůstatek", color="Fixace",
+            title="Zůstatek jistiny v čase",
+            labels={"Zůstatek": "Kč", "Měsíc": "Měsíc od začátku"},
+        )
+        fig_bal.add_vline(
+            x=now_month, line_dash="dash", line_color="red",
+            annotation_text="Teď")
+        fig_bal.update_layout(height=400)
+        st.plotly_chart(fig_bal, use_container_width=True)
+
+        # Graf splátky
+        fig_pmt = px.line(
+            df_tl, x="Měsíc", y="Splátka", color="Fixace",
+            title="Měsíční splátka v čase",
+            labels={"Splátka": "Kč", "Měsíc": "Měsíc od začátku"},
+        )
+        fig_pmt.add_vline(
+            x=now_month, line_dash="dash", line_color="red",
+            annotation_text="Teď")
+        fig_pmt.update_layout(height=300)
+        st.plotly_chart(fig_pmt, use_container_width=True)
+
+        # Souhrn fixací
+        st.subheader("Přehled fixací")
+        fix_labels = []
+        seen = set()
+        for row in timeline:
+            if row.fixation_label not in seen:
+                seen.add(row.fixation_label)
+                fix_labels.append(row.fixation_label)
+
+        fix_summary = []
+        for fl in fix_labels:
+            rows_in_fix = [r for r in timeline if r.fixation_label == fl]
+            months = len(rows_in_fix)
+            interest = sum(r.interest_part for r in rows_in_fix)
+            principal = sum(r.principal_part for r in rows_in_fix)
+            fix_summary.append({
+                "Fixace": fl,
+                "Měsíců": months,
+                "Let": f"{months / 12:.1f}",
+                "Zaplaceno úroky": f"{interest:,.0f} Kč",
+                "Splaceno jistiny": f"{principal:,.0f} Kč",
+            })
+
+        st.table(pd.DataFrame(fix_summary))
+
+        # Celkové souhrny
+        total_interest = timeline[-1].cumulative_interest
+        total_principal = timeline[-1].cumulative_principal
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Celkem úroky", f"{total_interest:,.0f} Kč")
+        c2.metric("Celkem splaceno jistiny", f"{total_principal:,.0f} Kč")
+        c3.metric("Celkem zaplaceno", f"{total_interest + total_principal:,.0f} Kč")
+
+
+# ──────────────────────────────────────────────────────────────
+# TAB 4: CITLIVOSTNÍ ANALÝZA
 # ──────────────────────────────────────────────────────────────
 with _tab["Citlivostní analýza"]:
     st.header("Citlivostní analýza")
