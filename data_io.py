@@ -260,39 +260,46 @@ def import_bank_csv(
 
         for entry in raw_entries[1:]:
             if abs(entry["rate"] - cur_rate) > 0.001:
-                # Nové období
+                # Konec období = poslední řádek před změnou
+                last_idx = entry["month_idx"] - 1
                 periods.append({
                     "rate": cur_rate,
-                    "months": entry["month_idx"] - period_start,
+                    "months": last_idx - period_start + 1,
                     "first_date": period_first_date,
-                    "last_date": raw_entries[entry["month_idx"] - 1]["date"],
+                    "last_date": raw_entries[last_idx]["date"],
+                    "end_balance": all_rows[last_idx].remaining_balance,
                 })
                 cur_rate = entry["rate"]
                 period_start = entry["month_idx"]
                 period_first_date = entry["date"]
 
         # Poslední období
+        last_idx = len(raw_entries) - 1
         periods.append({
             "rate": cur_rate,
-            "months": len(raw_entries) - period_start,
+            "months": last_idx - period_start + 1,
             "first_date": period_first_date,
-            "last_date": raw_entries[-1]["date"],
+            "last_date": raw_entries[last_idx]["date"],
+            "end_balance": all_rows[last_idx].remaining_balance,
         })
 
-    # Stávající hypotéka — z posledního minulého řádku
-    past_rows = [r for r in all_rows if r.is_past]
+    # Stávající hypotéka — z hranice fixačních období
     current_info: dict[str, Any] = {}
-    if past_rows:
-        last = past_rows[-1]
-        current_info["balance"] = last.remaining_balance
-        # Sazba stávající = sazba posledního minulého řádku
-        past_entries = [e for e in raw_entries if e["date"] <= cutoff_date]
-        if past_entries:
-            current_info["rate"] = past_entries[-1]["rate"]
-        # Zbývající splátky z CSV
-        future_count = len(all_rows) - len(past_rows)
-        if future_count > 0:
-            current_info["remaining_years"] = (future_count + 11) // 12
+    if len(periods) >= 2:
+        # Jistina na konci prvního (stávajícího) období
+        first_period = periods[0]
+        current_info["balance"] = first_period["end_balance"]
+        current_info["rate"] = first_period["rate"]
+        # Zbývající roky = celkový počet měsíců od konce první fixace
+        remaining_months = sum(p["months"] for p in periods[1:])
+        current_info["remaining_years"] = (remaining_months + 11) // 12
+    elif len(periods) == 1:
+        # Jen jedno období — vzít poslední řádek
+        current_info["balance"] = all_rows[-1].remaining_balance if all_rows else 0
+        current_info["rate"] = periods[0]["rate"]
+        remaining = len(all_rows) - len([r for r in all_rows if r.is_past])
+        if remaining > 0:
+            current_info["remaining_years"] = (remaining + 11) // 12
 
     return {
         "all_rows": all_rows,

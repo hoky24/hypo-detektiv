@@ -93,37 +93,41 @@ if "_pending_csv" in st.session_state:
     _past = [r for r in _csv["all_rows"] if r.is_past]
     st.session_state["_past_schedule"] = _past
 
-    # Předvyplnit stávající hypotéku
+    _periods = _csv["periods"]
     _cur = _csv["current"]
-    if _cur.get("balance"):
-        st.session_state["cur_principal"] = _cur["balance"]
+
+    # Předvyplnit stávající hypotéku
     if _cur.get("rate"):
         st.session_state["cur_rate"] = _cur["rate"]
+    if _cur.get("balance"):
+        st.session_state["cur_principal"] = _cur["balance"]
     if _cur.get("remaining_years"):
         st.session_state["cur_years"] = _cur["remaining_years"]
 
-    # Pokud je víc než jedno fixační období a poslední začíná v budoucnu,
-    # nabídneme ho jako novou nabídku
-    _periods = _csv["periods"]
+    # Zajistit checkbox "Mám stávající hypotéku"
+    st.session_state["has_current"] = True
+    # Smazat výsledky, aby se expander rozbalil a uživatel viděl předvyplněná data
+    st.session_state["offers"] = []
+
+    # Pokud jsou 2+ fixační období → poslední = nová nabídka
     if len(_periods) >= 2:
-        _last_period = _periods[-1]
-        _prev_period = _periods[-2]
-        # Předvyplnit nabídku 1 poslední sazbou z CSV
-        st.session_state["o0_bank"] = st.session_state.get("cur_bank", "ČSOB")
-        st.session_state["o0_rate"] = _last_period["rate"]
-        if _cur.get("remaining_years"):
-            st.session_state["o0_years"] = _cur["remaining_years"]
-        if _cur.get("balance"):
-            st.session_state["o0_principal"] = _cur["balance"]
+        _last_p = _periods[-1]
+        _balance = _cur.get("balance", 0)
+        _rem_years = _cur.get("remaining_years", _last_p["months"] // 12)
+
+        # Nabídka 1 = poslední sazba z CSV
+        _bank_name = st.session_state.get("cur_bank", "") or "ČSOB"
+        st.session_state["o0_bank"] = _bank_name
+        st.session_state["o0_rate"] = _last_p["rate"]
+        st.session_state["o0_years"] = _rem_years
+        st.session_state["o0_principal"] = _balance
         st.session_state["o0_is_cur"] = True
-        _fy = _last_period["months"] // 12 or 3
+        _fy = _last_p["months"] // 12 or 3
         for _std in [3, 5, 7, 10]:
             if _std <= _fy:
                 _fy = _std
                 break
         st.session_state["o0_fix"] = _fy
-        # Stávající sazba = předposlední období
-        st.session_state["cur_rate"] = _prev_period["rate"]
 
     st.rerun()
 
