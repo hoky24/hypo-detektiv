@@ -710,48 +710,81 @@ Datum;Čerpání Kč;Mimořádná splátka Kč;Sazba % p. a.;Splátka Kč;Úrok 
 25. 8. 2018;;;1.690;6 696,50;2 656,20;4 040,30;1 881 925,10
 """
 
+    # CSV with past + future (rate change at 2025-01-25)
+    CSV_WITH_FUTURE = """\
+Datum;Čerpání Kč;Mimořádná splátka Kč;Sazba % p. a.;Splátka Kč;Úrok Kč;Jistina Kč;Nesplacená jistina Kč
+25. 11. 2025;;;1.690;6 696,50;2 100,00;4 596,50;1 500 000
+25. 12. 2025;;;1.690;6 696,50;2 093,50;4 603,00;1 495 397
+25. 1. 2026;;;4.190;7 500,00;5 218,20;2 281,80;1 493 115,20
+25. 2. 2026;;;4.190;7 500,00;5 210,50;2 289,50;1 490 825,70
+25. 3. 2030;;;4.190;7 500,00;4 800,00;2 700,00;1 400 000
+"""
+
+    def _rows(self):
+        return import_bank_csv(self.SAMPLE_CSV)["past_rows"]
+
     def test_parse_rows(self):
-        rows = import_bank_csv(self.SAMPLE_CSV)
-        # 3 interest-only + 1 interest after last drawdown + 2 regular = 6
+        rows = self._rows()
         self.assertEqual(len(rows), 6)
 
     def test_drawdowns_skipped(self):
-        rows = import_bank_csv(self.SAMPLE_CSV)
-        # No row should have is_past=False
+        rows = self._rows()
         self.assertTrue(all(r.is_past for r in rows))
 
     def test_balance_decreasing_after_drawdown(self):
-        rows = import_bank_csv(self.SAMPLE_CSV)
-        # After all drawdowns, balance should decrease
+        rows = self._rows()
         regular = [r for r in rows if r.principal_part > 0]
         if len(regular) >= 2:
             self.assertGreater(regular[0].remaining_balance, regular[-1].remaining_balance)
 
     def test_cumulative_interest(self):
-        rows = import_bank_csv(self.SAMPLE_CSV)
+        rows = self._rows()
         total = sum(r.interest_part for r in rows)
         self.assertAlmostEqual(rows[-1].cumulative_interest, total, delta=0.01)
 
     def test_fixation_label(self):
-        rows = import_bank_csv(self.SAMPLE_CSV)
+        rows = self._rows()
         self.assertIn("1.69", rows[0].fixation_label)
 
     def test_czech_number_parsing(self):
-        """Čísla s mezerami a čárkou se správně parsují."""
-        rows = import_bank_csv(self.SAMPLE_CSV)
+        rows = self._rows()
         regular = [r for r in rows if r.payment > 6000]
         self.assertGreater(len(regular), 0)
         self.assertAlmostEqual(regular[0].payment, 6696.50, delta=0.01)
 
     def test_bytes_windows1250(self):
         encoded = self.SAMPLE_CSV.encode("windows-1250")
-        rows = import_bank_csv(encoded)
-        self.assertGreater(len(rows), 0)
+        result = import_bank_csv(encoded)
+        self.assertGreater(len(result["past_rows"]), 0)
 
     def test_bytes_utf8(self):
         encoded = self.SAMPLE_CSV.encode("utf-8")
-        rows = import_bank_csv(encoded, encoding="utf-8")
-        self.assertGreater(len(rows), 0)
+        result = import_bank_csv(encoded, encoding="utf-8")
+        self.assertGreater(len(result["past_rows"]), 0)
+
+    def test_current_info(self):
+        result = import_bank_csv(self.SAMPLE_CSV)
+        cur = result["current"]
+        self.assertAlmostEqual(cur["balance"], 1_881_925.10, delta=1.0)
+        self.assertAlmostEqual(cur["rate"], 1.69, delta=0.01)
+
+    def test_future_offer_extracted(self):
+        """CSV s budoucností → nová nabídka se extrahuje."""
+        import datetime as _dt
+        result = import_bank_csv(self.CSV_WITH_FUTURE,
+                                 cutoff_date=_dt.date(2026, 1, 1))
+        past = result["past_rows"]
+        fut = result["future_offer"]
+        # Past: 2 rows (Nov, Dec 2025)
+        self.assertEqual(len(past), 2)
+        # Future offer extracted
+        self.assertIsNotNone(fut)
+        self.assertAlmostEqual(fut["rate"], 4.19, delta=0.01)
+        self.assertEqual(fut["remaining_months"], 3)
+
+    def test_no_future_when_all_past(self):
+        result = import_bank_csv(self.SAMPLE_CSV)
+        self.assertIsNone(result["future_offer"])
 
 
 class TestDataIOHistory(unittest.TestCase):

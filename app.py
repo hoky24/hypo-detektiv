@@ -222,17 +222,50 @@ with st.expander("Vstupní data", expanded=not st.session_state.offers):
 
         # Historie hypotéky — import CSV z banky
         with st.expander("Historie hypotéky (volitelné)"):
-            st.caption("Nahrajte CSV splátkového kalendáře z banky pro zobrazení celého průběhu.")
+            st.caption("Nahrajte CSV splátkového kalendáře z banky pro zobrazení celého průběhu. "
+                       "Údaje o stávající hypotéce a nové nabídce se předvyplní automaticky.")
             csv_file = st.file_uploader(
                 "CSV splátkový kalendář", type=["csv"],
                 key="cur_history_csv",
                 help="Formát ČSOB: Datum;Čerpání;Sazba;Splátka;Úrok;Jistina;Nesplacená jistina (kódování Windows-1250 nebo UTF-8)")
 
-            if csv_file is not None:
+            if csv_file is not None and "_csv_processed" not in st.session_state:
                 try:
-                    history_rows = import_bank_csv(csv_file.read())
-                    st.session_state["_past_schedule"] = history_rows
-                    st.success(f"Načteno {len(history_rows)} měsíců historie.")
+                    result = import_bank_csv(csv_file.read())
+                    st.session_state["_past_schedule"] = result["past_rows"]
+                    st.session_state["_csv_processed"] = True
+
+                    # Předvyplnit stávající hypotéku
+                    cur_info = result["current"]
+                    if cur_info.get("balance"):
+                        st.session_state["cur_principal"] = cur_info["balance"]
+                    if cur_info.get("rate"):
+                        st.session_state["cur_rate"] = cur_info["rate"]
+                    if cur_info.get("remaining_years"):
+                        st.session_state["cur_years"] = cur_info["remaining_years"]
+
+                    # Předvyplnit novou nabídku od stávající banky
+                    fut = result["future_offer"]
+                    if fut:
+                        st.session_state["o0_bank"] = cur_bank or "ČSOB"
+                        st.session_state["o0_rate"] = fut["rate"]
+                        st.session_state["o0_years"] = fut["remaining_years"]
+                        if cur_info.get("balance"):
+                            st.session_state["o0_principal"] = cur_info["balance"]
+                        st.session_state["o0_is_cur"] = True
+                        fix_y = fut["remaining_years"]
+                        for std in [3, 5, 7, 10]:
+                            if std <= fix_y:
+                                fix_y = std
+                                break
+                        st.session_state["o0_fix"] = fix_y
+
+                    past = result["past_rows"]
+                    msg = f"Načteno {len(past)} měsíců historie."
+                    if fut:
+                        msg += f" Nová nabídka: {fut['rate']:.2f} %, {fut['remaining_years']} let."
+                    st.success(msg)
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Chyba při importu CSV: {e}")
 
@@ -242,6 +275,10 @@ with st.expander("Vstupní data", expanded=not st.session_state.offers):
                     f"Historie: {len(rows)} měsíců, "
                     f"zůstatek {rows[-1].remaining_balance:,.0f} Kč, "
                     f"zaplaceno úroky {rows[-1].cumulative_interest:,.0f} Kč")
+                if st.button("Smazat historii", key="clear_history"):
+                    st.session_state.pop("_past_schedule", None)
+                    st.session_state.pop("_csv_processed", None)
+                    st.rerun()
 
         st.session_state.current_mortgage = MortgageParams(
             principal=cur_principal, annual_rate=cur_rate, years=cur_years,
