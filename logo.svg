@@ -1,33 +1,33 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
     <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#1976D2"/>
+      <stop offset="0%" stop-color="#2196F3"/>
       <stop offset="100%" stop-color="#0D47A1"/>
     </linearGradient>
   </defs>
 
   <!-- Handle -->
-  <line x1="340" y1="340" x2="490" y2="490" stroke="#0D47A1" stroke-width="50" stroke-linecap="round"/>
+  <line x1="345" y1="345" x2="485" y2="485" stroke="#0D47A1" stroke-width="56" stroke-linecap="round"/>
 
   <!-- Ring -->
-  <circle cx="210" cy="210" r="175" fill="url(#ring)"/>
-  <circle cx="210" cy="210" r="148" fill="white"/>
+  <circle cx="210" cy="210" r="180" fill="url(#ring)"/>
+  <circle cx="210" cy="210" r="148" fill="#0D47A1"/>
 
-  <!-- House — large, fills the glass -->
-  <g transform="translate(210, 205)">
+  <!-- House — bold, high contrast on dark background -->
+  <g transform="translate(210, 210)">
     <!-- Roof -->
-    <polygon points="0,-105 -95,-20 95,-20" fill="#1976D2"/>
+    <polygon points="0,-110 -100,-25 100,-25" fill="#FFC107"/>
     <!-- Wall -->
-    <rect x="-70" y="-20" width="140" height="95" fill="#E3F2FD"/>
+    <rect x="-72" y="-25" width="144" height="100" fill="white"/>
     <!-- Door -->
-    <rect x="-14" y="22" width="28" height="53" rx="3" fill="#1976D2"/>
+    <rect x="-16" y="20" width="32" height="55" rx="3" fill="#0D47A1"/>
     <!-- Windows -->
-    <rect x="-54" y="4" width="28" height="28" rx="3" fill="#1976D2" opacity="0.6"/>
-    <rect x="26" y="4" width="28" height="28" rx="3" fill="#1976D2" opacity="0.6"/>
+    <rect x="-56" y="-2" width="30" height="30" rx="3" fill="#2196F3"/>
+    <rect x="26" y="-2" width="30" height="30" rx="3" fill="#2196F3"/>
   </g>
 
-  <!-- Percent badge — larger, with white border -->
-  <circle cx="350" cy="68" r="50" fill="white"/>
-  <circle cx="350" cy="68" r="44" fill="#FF6F00"/>
-  <text x="350" y="83" text-anchor="middle" font-family="Arial,sans-serif" font-weight="bold" font-size="44" fill="white">%</text>
+  <!-- Percent badge — big and bold -->
+  <circle cx="365" cy="62" r="62" fill="white"/>
+  <circle cx="365" cy="62" r="54" fill="#FF6F00"/>
+  <text x="365" y="82" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-weight="bold" font-size="58" fill="white">%</text>
 </svg>

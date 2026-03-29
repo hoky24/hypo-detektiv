@@ -25,11 +25,24 @@ from mortgage import (
 )
 from data_io import export_json, import_json, import_bank_csv, summaries_to_csv
 
+import base64 as _base64
 import pathlib as _pathlib
 _logo_path = _pathlib.Path(__file__).parent / "logo.svg"
-_logo_svg = _logo_path.read_text() if _logo_path.exists() else "🔍"
-st.set_page_config(page_title="HypoDetektiv", page_icon=_logo_svg, layout="wide")
-st.title("🔍 HypoDetektiv")
+_logo_svg = _logo_path.read_text() if _logo_path.exists() else None
+st.set_page_config(page_title="HypoDetektiv", page_icon=_logo_svg or "🔍", layout="wide")
+if _logo_svg:
+    _logo_b64 = _base64.b64encode(_logo_svg.encode()).decode()
+    # Circle center is at y=210 of 512 total ≈ 41% from top.
+    # With 100px image, circle center ≈ 41px from top.
+    st.markdown(
+        f"""<div style="display:flex;align-items:flex-start;gap:18px;margin-bottom:0.5em">
+        <img src="data:image/svg+xml;base64,{_logo_b64}" style="width:100px;height:100px;flex-shrink:0">
+        <h1 style="margin:0;padding:0;line-height:1;margin-top:22px">HypoDetektiv</h1>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+else:
+    st.title("🔍 HypoDetektiv")
 
 
 # ============================================================

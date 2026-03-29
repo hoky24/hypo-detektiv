@@ -23,7 +23,7 @@
       {
         packages.default = pkgs.writeShellScriptBin "hypodetektiv" ''
           WORKDIR=$(mktemp -d)
-          cp -r ${appSrc}/*.py ${appSrc}/data "$WORKDIR/" 2>/dev/null || true
+          cp -r ${appSrc}/*.py ${appSrc}/*.svg ${appSrc}/data "$WORKDIR/" 2>/dev/null || true
           cd "$WORKDIR"
           trap "rm -rf $WORKDIR" EXIT
           ${pythonEnv}/bin/streamlit run app.py --server.headless true "$@"
