@@ -300,12 +300,14 @@ with st.expander("Vstupní data", expanded=not st.session_state.offers):
                 principal = st.number_input("Výše úvěru (Kč)", min_value=100_000.0, max_value=50_000_000.0,
                                             step=100_000.0, key=f"o{i}_principal")
             with c2:
-                rate = st.number_input("Sazba (%)", min_value=0.0, max_value=20.0, value=5.0, step=0.1, format="%.2f", key=f"o{i}_rate")
+                _init(f"o{i}_rate", 5.0)
+                rate = st.number_input("Sazba (%)", min_value=0.0, max_value=20.0, step=0.1, format="%.2f", key=f"o{i}_rate")
             with c3:
                 _init(f"o{i}_years", cur_years if has_current else 25)
                 years = st.number_input("Splácení (roky)", min_value=1, max_value=40, key=f"o{i}_years")
             with c4:
-                fix = st.number_input("Fixace (roky)", min_value=0, max_value=15, value=5, key=f"o{i}_fix")
+                _init(f"o{i}_fix", 5)
+                fix = st.number_input("Fixace (roky)", min_value=0, max_value=15, key=f"o{i}_fix")
 
             is_cur_bank = False
             switching = []
@@ -315,7 +317,8 @@ with st.expander("Vstupní data", expanded=not st.session_state.offers):
                     switching = render_switching_costs(f"o{i}")
 
             additional = render_additional_costs(f"o{i}_ac")
-            bonus = st.number_input("Bonus / odměna od banky (Kč)", min_value=0.0, value=0.0, step=1000.0,
+            _init(f"o{i}_bonus", 0.0)
+            bonus = st.number_input("Bonus / odměna od banky (Kč)", min_value=0.0, step=1000.0,
                                     key=f"o{i}_bonus", help="Jednorázová odměna za sjednání hypotéky")
 
             with st.expander("Podmínky banky"):
