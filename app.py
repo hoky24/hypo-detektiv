@@ -83,6 +83,36 @@ if "_pending_import" in st.session_state:
     st.session_state.offers = imported.get("offers", [])
     st.rerun()
 
+# Zpracování čekajícího CSV importu (PŘED widgety)
+if "_pending_csv" in st.session_state:
+    _csv_result = st.session_state.pop("_pending_csv")
+    st.session_state["_past_schedule"] = _csv_result["past_rows"]
+
+    _cur = _csv_result["current"]
+    if _cur.get("balance"):
+        st.session_state["cur_principal"] = _cur["balance"]
+    if _cur.get("rate"):
+        st.session_state["cur_rate"] = _cur["rate"]
+    if _cur.get("remaining_years"):
+        st.session_state["cur_years"] = _cur["remaining_years"]
+
+    _fut = _csv_result["future_offer"]
+    if _fut:
+        st.session_state["o0_bank"] = st.session_state.get("cur_bank", "ČSOB")
+        st.session_state["o0_rate"] = _fut["rate"]
+        st.session_state["o0_years"] = _cur.get("remaining_years", _fut["remaining_years"])
+        if _cur.get("balance"):
+            st.session_state["o0_principal"] = _cur["balance"]
+        st.session_state["o0_is_cur"] = True
+        _fy = _fut["remaining_years"]
+        for _std in [3, 5, 7, 10]:
+            if _std <= _fy:
+                _fy = _std
+                break
+        st.session_state["o0_fix"] = _fy
+
+    st.rerun()
+
 
 # ============================================================
 # FORMULÁŘE
@@ -229,42 +259,10 @@ with st.expander("Vstupní data", expanded=not st.session_state.offers):
                 key="cur_history_csv",
                 help="Formát ČSOB: Datum;Čerpání;Sazba;Splátka;Úrok;Jistina;Nesplacená jistina (kódování Windows-1250 nebo UTF-8)")
 
-            if csv_file is not None and "_csv_processed" not in st.session_state:
+            if csv_file is not None and "_past_schedule" not in st.session_state:
                 try:
                     result = import_bank_csv(csv_file.read())
-                    st.session_state["_past_schedule"] = result["past_rows"]
-                    st.session_state["_csv_processed"] = True
-
-                    # Předvyplnit stávající hypotéku
-                    cur_info = result["current"]
-                    if cur_info.get("balance"):
-                        st.session_state["cur_principal"] = cur_info["balance"]
-                    if cur_info.get("rate"):
-                        st.session_state["cur_rate"] = cur_info["rate"]
-                    if cur_info.get("remaining_years"):
-                        st.session_state["cur_years"] = cur_info["remaining_years"]
-
-                    # Předvyplnit novou nabídku od stávající banky
-                    fut = result["future_offer"]
-                    if fut:
-                        st.session_state["o0_bank"] = cur_bank or "ČSOB"
-                        st.session_state["o0_rate"] = fut["rate"]
-                        st.session_state["o0_years"] = fut["remaining_years"]
-                        if cur_info.get("balance"):
-                            st.session_state["o0_principal"] = cur_info["balance"]
-                        st.session_state["o0_is_cur"] = True
-                        fix_y = fut["remaining_years"]
-                        for std in [3, 5, 7, 10]:
-                            if std <= fix_y:
-                                fix_y = std
-                                break
-                        st.session_state["o0_fix"] = fix_y
-
-                    past = result["past_rows"]
-                    msg = f"Načteno {len(past)} měsíců historie."
-                    if fut:
-                        msg += f" Nová nabídka: {fut['rate']:.2f} %, {fut['remaining_years']} let."
-                    st.success(msg)
+                    st.session_state["_pending_csv"] = result
                     st.rerun()
                 except Exception as e:
                     st.error(f"Chyba při importu CSV: {e}")
@@ -277,7 +275,6 @@ with st.expander("Vstupní data", expanded=not st.session_state.offers):
                     f"zaplaceno úroky {rows[-1].cumulative_interest:,.0f} Kč")
                 if st.button("Smazat historii", key="clear_history"):
                     st.session_state.pop("_past_schedule", None)
-                    st.session_state.pop("_csv_processed", None)
                     st.rerun()
 
         st.session_state.current_mortgage = MortgageParams(
