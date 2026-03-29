@@ -720,34 +720,34 @@ Datum;Čerpání Kč;Mimořádná splátka Kč;Sazba % p. a.;Splátka Kč;Úrok 
 25. 3. 2030;;;4.190;7 500,00;4 800,00;2 700,00;1 400 000
 """
 
-    def _rows(self):
-        return import_bank_csv(self.SAMPLE_CSV)["past_rows"]
+    def _past_rows(self):
+        return [r for r in import_bank_csv(self.SAMPLE_CSV)["all_rows"] if r.is_past]
 
     def test_parse_rows(self):
-        rows = self._rows()
+        rows = self._past_rows()
         self.assertEqual(len(rows), 6)
 
     def test_drawdowns_skipped(self):
-        rows = self._rows()
+        rows = self._past_rows()
         self.assertTrue(all(r.is_past for r in rows))
 
     def test_balance_decreasing_after_drawdown(self):
-        rows = self._rows()
+        rows = self._past_rows()
         regular = [r for r in rows if r.principal_part > 0]
         if len(regular) >= 2:
             self.assertGreater(regular[0].remaining_balance, regular[-1].remaining_balance)
 
     def test_cumulative_interest(self):
-        rows = self._rows()
+        rows = self._past_rows()
         total = sum(r.interest_part for r in rows)
         self.assertAlmostEqual(rows[-1].cumulative_interest, total, delta=0.01)
 
     def test_fixation_label(self):
-        rows = self._rows()
+        rows = self._past_rows()
         self.assertIn("1.69", rows[0].fixation_label)
 
     def test_czech_number_parsing(self):
-        rows = self._rows()
+        rows = self._past_rows()
         regular = [r for r in rows if r.payment > 6000]
         self.assertGreater(len(regular), 0)
         self.assertAlmostEqual(regular[0].payment, 6696.50, delta=0.01)
@@ -755,12 +755,14 @@ Datum;Čerpání Kč;Mimořádná splátka Kč;Sazba % p. a.;Splátka Kč;Úrok 
     def test_bytes_windows1250(self):
         encoded = self.SAMPLE_CSV.encode("windows-1250")
         result = import_bank_csv(encoded)
-        self.assertGreater(len(result["past_rows"]), 0)
+        past = [r for r in result["all_rows"] if r.is_past]
+        self.assertGreater(len(past), 0)
 
     def test_bytes_utf8(self):
         encoded = self.SAMPLE_CSV.encode("utf-8")
         result = import_bank_csv(encoded, encoding="utf-8")
-        self.assertGreater(len(result["past_rows"]), 0)
+        past = [r for r in result["all_rows"] if r.is_past]
+        self.assertGreater(len(past), 0)
 
     def test_current_info(self):
         result = import_bank_csv(self.SAMPLE_CSV)
@@ -768,23 +770,30 @@ Datum;Čerpání Kč;Mimořádná splátka Kč;Sazba % p. a.;Splátka Kč;Úrok 
         self.assertAlmostEqual(cur["balance"], 1_881_925.10, delta=1.0)
         self.assertAlmostEqual(cur["rate"], 1.69, delta=0.01)
 
-    def test_future_offer_extracted(self):
-        """CSV s budoucností → nová nabídka se extrahuje."""
+    def test_periods_detected(self):
+        """CSV se dvěma sazbami → 2 fixační období."""
+        import datetime as _dt
+        result = import_bank_csv(self.CSV_WITH_FUTURE,
+                                 cutoff_date=_dt.date(2030, 12, 31))
+        periods = result["periods"]
+        self.assertEqual(len(periods), 2)
+        self.assertAlmostEqual(periods[0]["rate"], 1.69, delta=0.01)
+        self.assertAlmostEqual(periods[1]["rate"], 4.19, delta=0.01)
+
+    def test_past_future_split(self):
+        """Řádky se správně dělí na minulost a budoucnost."""
         import datetime as _dt
         result = import_bank_csv(self.CSV_WITH_FUTURE,
                                  cutoff_date=_dt.date(2026, 1, 1))
-        past = result["past_rows"]
-        fut = result["future_offer"]
-        # Past: 2 rows (Nov, Dec 2025)
+        past = [r for r in result["all_rows"] if r.is_past]
+        future = [r for r in result["all_rows"] if not r.is_past]
         self.assertEqual(len(past), 2)
-        # Future offer extracted
-        self.assertIsNotNone(fut)
-        self.assertAlmostEqual(fut["rate"], 4.19, delta=0.01)
-        self.assertEqual(fut["remaining_months"], 3)
+        self.assertEqual(len(future), 3)
 
-    def test_no_future_when_all_past(self):
+    def test_single_period(self):
+        """CSV s jednou sazbou → 1 období."""
         result = import_bank_csv(self.SAMPLE_CSV)
-        self.assertIsNone(result["future_offer"])
+        self.assertEqual(len(result["periods"]), 1)
 
 
 class TestDataIOHistory(unittest.TestCase):

@@ -122,44 +122,27 @@ def _parse_czech_date(s: str) -> datetime.date:
     raise ValueError(f"Neplatný formát data: {s}")
 
 
-def import_bank_csv(
-    content: bytes | str,
-    encoding: str = "windows-1250",
-    cutoff_date: datetime.date | None = None,
-) -> dict[str, Any]:
-    """Importuje splátkový kalendář z CSV exportu banky (ČSOB formát).
-
-    Vrací dict:
-        past_rows: list[TimelineRow] — řádky do cutoff_date
-        current: dict — stávající hypotéka {balance, rate, remaining_years, bank}
-        future_offer: dict | None — nová nabídka z CSV {rate, remaining_years, monthly_payment}
-    """
-    if cutoff_date is None:
-        cutoff_date = datetime.date.today()
+def _decode_csv(content: bytes | str, encoding: str = "windows-1250") -> str:
+    """Dekóduje CSV obsah na text."""
     if isinstance(content, bytes):
         for enc in [encoding, "utf-8", "utf-8-sig", "latin-1"]:
             try:
-                text = content.decode(enc)
-                break
+                return content.decode(enc)
             except (UnicodeDecodeError, LookupError):
                 continue
-        else:
-            text = content.decode("utf-8", errors="replace")
-    else:
-        text = content
+        return content.decode("utf-8", errors="replace")
+    return content
 
-    reader = csv.reader(io.StringIO(text), delimiter=';')
 
-    # Najít řádek s hlavičkou
-    header = None
+def _parse_csv_header(reader) -> dict[str, int]:
+    """Najde hlavičku a vrátí mapování sloupců."""
     for row in reader:
         if any("datum" in c.lower() for c in row):
             header = [c.strip() for c in row]
             break
-    if not header:
+    else:
         raise ValueError("CSV neobsahuje rozpoznatelnou hlavičku.")
 
-    # Mapování sloupců (flexibilní)
     col_map: dict[str, int] = {}
     for i, h in enumerate(header):
         hl = h.lower()
@@ -182,18 +165,41 @@ def import_bank_csv(
 
     if "datum" not in col_map:
         raise ValueError("CSV neobsahuje sloupec 'Datum'.")
+    return col_map
+
+
+def import_bank_csv(
+    content: bytes | str,
+    encoding: str = "windows-1250",
+    cutoff_date: datetime.date | None = None,
+) -> dict[str, Any]:
+    """Importuje splátkový kalendář z CSV exportu banky (ČSOB formát).
+
+    Parsuje všechny řádky, detekuje fixační období (změny sazby).
+    Vrací dict:
+        all_rows: list[TimelineRow] — všechny splátky
+        periods: list[dict] — fixační období [{rate, months, first_date, last_date}]
+        current: dict — stávající hypotéka {balance, rate, remaining_years}
+    """
+    if cutoff_date is None:
+        cutoff_date = datetime.date.today()
+    text = _decode_csv(content, encoding)
+    reader = csv.reader(io.StringIO(text), delimiter=';')
+    col_map = _parse_csv_header(reader)
 
     def _get(row, key):
         if key in col_map and col_map[key] < len(row):
             return _parse_czech_number(row[col_map[key]])
         return 0.0
 
-    past_rows: list[TimelineRow] = []
-    future_payments: list[dict] = []
+    all_rows: list[TimelineRow] = []
     cum_interest = 0.0
     cum_principal = 0.0
     month = 0
     last_rate = 0.0
+
+    # Surová data pro detekci období
+    raw_entries: list[dict] = []
 
     for row in reader:
         if not row or len(row) <= col_map["datum"]:
@@ -226,57 +232,72 @@ def import_bank_csv(
         if splatka == 0 and urok == 0:
             continue
 
-        if row_date <= cutoff_date:
-            month += 1
-            cum_interest += urok
-            cum_principal += jistina
-            label = f"Fixace ({sazba:.2f} %)" if sazba > 0 else "Fixace"
-            past_rows.append(TimelineRow(
-                month=month,
-                payment=round(splatka, 2),
-                principal_part=round(jistina, 2),
-                interest_part=round(urok, 2),
-                remaining_balance=round(zustatek, 2),
-                cumulative_interest=round(cum_interest, 2),
-                cumulative_principal=round(cum_principal, 2),
-                is_past=True,
-                fixation_label=label,
-            ))
-        else:
-            future_payments.append({
-                "date": row_date, "payment": splatka, "interest": urok,
-                "principal": jistina, "balance": zustatek, "rate": sazba,
-            })
+        month += 1
+        cum_interest += urok
+        cum_principal += jistina
+        is_past = row_date <= cutoff_date
+        label = f"Fixace ({sazba:.2f} %)" if sazba > 0 else "Fixace"
 
-    # Extrahovat údaje o stávající hypotéce
+        all_rows.append(TimelineRow(
+            month=month,
+            payment=round(splatka, 2),
+            principal_part=round(jistina, 2),
+            interest_part=round(urok, 2),
+            remaining_balance=round(zustatek, 2),
+            cumulative_interest=round(cum_interest, 2),
+            cumulative_principal=round(cum_principal, 2),
+            is_past=is_past,
+            fixation_label=label,
+        ))
+        raw_entries.append({"date": row_date, "rate": sazba, "month_idx": month - 1})
+
+    # Detekovat fixační období (změny sazby)
+    periods: list[dict[str, Any]] = []
+    if raw_entries:
+        cur_rate = raw_entries[0]["rate"]
+        period_start = 0
+        period_first_date = raw_entries[0]["date"]
+
+        for entry in raw_entries[1:]:
+            if abs(entry["rate"] - cur_rate) > 0.001:
+                # Nové období
+                periods.append({
+                    "rate": cur_rate,
+                    "months": entry["month_idx"] - period_start,
+                    "first_date": period_first_date,
+                    "last_date": raw_entries[entry["month_idx"] - 1]["date"],
+                })
+                cur_rate = entry["rate"]
+                period_start = entry["month_idx"]
+                period_first_date = entry["date"]
+
+        # Poslední období
+        periods.append({
+            "rate": cur_rate,
+            "months": len(raw_entries) - period_start,
+            "first_date": period_first_date,
+            "last_date": raw_entries[-1]["date"],
+        })
+
+    # Stávající hypotéka — z posledního minulého řádku
+    past_rows = [r for r in all_rows if r.is_past]
     current_info: dict[str, Any] = {}
     if past_rows:
         last = past_rows[-1]
         current_info["balance"] = last.remaining_balance
-        current_info["rate"] = last_rate
-
-    # Extrahovat budoucí nabídku (pokud CSV obsahuje budoucnost)
-    future_offer: dict[str, Any] | None = None
-    if future_payments:
-        fut_rate = future_payments[0]["rate"]
-        fut_months = len(future_payments)
-        fut_payment = future_payments[0]["payment"]
-        # Zbývající roky = počet budoucích splátek / 12, zaokrouhleno nahoru
-        fut_years = (fut_months + 11) // 12
-        future_offer = {
-            "rate": fut_rate,
-            "remaining_months": fut_months,
-            "remaining_years": fut_years,
-            "monthly_payment": fut_payment,
-        }
-        # Celková zbývající doba = minulost + budoucnost → odvodit zbývající roky stávající
-        if past_rows:
-            current_info["remaining_years"] = fut_years
+        # Sazba stávající = sazba posledního minulého řádku
+        past_entries = [e for e in raw_entries if e["date"] <= cutoff_date]
+        if past_entries:
+            current_info["rate"] = past_entries[-1]["rate"]
+        # Zbývající splátky z CSV
+        future_count = len(all_rows) - len(past_rows)
+        if future_count > 0:
+            current_info["remaining_years"] = (future_count + 11) // 12
 
     return {
-        "past_rows": past_rows,
+        "all_rows": all_rows,
+        "periods": periods,
         "current": current_info,
-        "future_offer": future_offer,
     }
 
 

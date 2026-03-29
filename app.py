@@ -85,10 +85,16 @@ if "_pending_import" in st.session_state:
 
 # Zpracování čekajícího CSV importu (PŘED widgety)
 if "_pending_csv" in st.session_state:
-    _csv_result = st.session_state.pop("_pending_csv")
-    st.session_state["_past_schedule"] = _csv_result["past_rows"]
+    _csv = st.session_state.pop("_pending_csv")
+    st.session_state["_csv_all_rows"] = _csv["all_rows"]
+    st.session_state["_csv_periods"] = _csv["periods"]
 
-    _cur = _csv_result["current"]
+    # Historické řádky (minulost)
+    _past = [r for r in _csv["all_rows"] if r.is_past]
+    st.session_state["_past_schedule"] = _past
+
+    # Předvyplnit stávající hypotéku
+    _cur = _csv["current"]
     if _cur.get("balance"):
         st.session_state["cur_principal"] = _cur["balance"]
     if _cur.get("rate"):
@@ -96,20 +102,28 @@ if "_pending_csv" in st.session_state:
     if _cur.get("remaining_years"):
         st.session_state["cur_years"] = _cur["remaining_years"]
 
-    _fut = _csv_result["future_offer"]
-    if _fut:
+    # Pokud je víc než jedno fixační období a poslední začíná v budoucnu,
+    # nabídneme ho jako novou nabídku
+    _periods = _csv["periods"]
+    if len(_periods) >= 2:
+        _last_period = _periods[-1]
+        _prev_period = _periods[-2]
+        # Předvyplnit nabídku 1 poslední sazbou z CSV
         st.session_state["o0_bank"] = st.session_state.get("cur_bank", "ČSOB")
-        st.session_state["o0_rate"] = _fut["rate"]
-        st.session_state["o0_years"] = _cur.get("remaining_years", _fut["remaining_years"])
+        st.session_state["o0_rate"] = _last_period["rate"]
+        if _cur.get("remaining_years"):
+            st.session_state["o0_years"] = _cur["remaining_years"]
         if _cur.get("balance"):
             st.session_state["o0_principal"] = _cur["balance"]
         st.session_state["o0_is_cur"] = True
-        _fy = _fut["remaining_years"]
+        _fy = _last_period["months"] // 12 or 3
         for _std in [3, 5, 7, 10]:
             if _std <= _fy:
                 _fy = _std
                 break
         st.session_state["o0_fix"] = _fy
+        # Stávající sazba = předposlední období
+        st.session_state["cur_rate"] = _prev_period["rate"]
 
     st.rerun()
 
@@ -268,13 +282,40 @@ with st.expander("Vstupní data", expanded=not st.session_state.offers):
                     st.error(f"Chyba při importu CSV: {e}")
 
             if st.session_state.get("_past_schedule"):
-                rows = st.session_state["_past_schedule"]
+                past = st.session_state["_past_schedule"]
+                periods = st.session_state.get("_csv_periods", [])
+
+                # Zobrazit detekovaná fixační období
+                if periods:
+                    st.markdown("**Detekovaná fixační období:**")
+                    for pi, p in enumerate(periods):
+                        years = p["months"] / 12
+                        st.caption(
+                            f"{pi+1}. Sazba **{p['rate']:.2f} %** — "
+                            f"{p['months']} měs. ({years:.1f} let), "
+                            f"{p['first_date']} – {p['last_date']}")
+
+                    if len(periods) >= 2:
+                        _init("_csv_last_is_offer", True)
+                        is_offer = st.checkbox(
+                            f"Poslední sazba ({periods[-1]['rate']:.2f} %) je nová nabídka od banky",
+                            key="_csv_last_is_offer",
+                            help="Zaškrtněte, pokud CSV obsahuje modelaci nové nabídky. "
+                                 "Odškrtněte, pokud celé CSV je průběh stávající hypotéky.")
+
+                        if not is_offer:
+                            # Celé CSV = stávající hypotéka, použít všechny řádky jako historii
+                            all_rows = st.session_state.get("_csv_all_rows", [])
+                            st.session_state["_past_schedule"] = all_rows
+
                 st.caption(
-                    f"Historie: {len(rows)} měsíců, "
-                    f"zůstatek {rows[-1].remaining_balance:,.0f} Kč, "
-                    f"zaplaceno úroky {rows[-1].cumulative_interest:,.0f} Kč")
+                    f"Historie: {len(past)} měsíců, "
+                    f"zůstatek {past[-1].remaining_balance:,.0f} Kč, "
+                    f"zaplaceno úroky {past[-1].cumulative_interest:,.0f} Kč")
+
                 if st.button("Smazat historii", key="clear_history"):
-                    st.session_state.pop("_past_schedule", None)
+                    for k in ("_past_schedule", "_csv_all_rows", "_csv_periods"):
+                        st.session_state.pop(k, None)
                     st.rerun()
 
         st.session_state.current_mortgage = MortgageParams(
