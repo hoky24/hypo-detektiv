@@ -461,29 +461,51 @@ with _tab["Srovnání nabídek"]:
         best_idx = min(range(len(fix_summaries)), key=lambda i: fix_summaries[i][1].total_cost_in_fixation)
         best_s, best_f = fix_summaries[best_idx]
 
+        # Nejlevnější splátka
+        cheapest_payment = min(s.monthly_total for s, _ in fix_summaries)
+
         fix_table = []
         for s, f in fix_summaries:
             diff_total = f.total_cost_in_fixation - best_f.total_cost_in_fixation
-            diff_monthly = f.effective_monthly_cost - best_f.effective_monthly_cost
+            diff_payment = s.monthly_total - cheapest_payment
             fix_table.append({
                 "Nabídka": s.bank_name,
                 "Sazba %": s.annual_rate,
+                "RPSN %": s.rpsn,
                 "Fixace": f"{f.fixation_years} let",
                 "Splátka": f"{s.monthly_payment:,.0f} Kč",
-                "Úroky za fixaci": f"{f.interest_in_fixation:,.0f} Kč",
-                "Poplatky za fixaci": f"{f.additional_costs_in_fixation:,.0f} Kč",
+                "Měsíčně celkem": f"{s.monthly_total:,.0f} Kč",
+                "Rozdíl splátka": "Nejnižší" if diff_payment == 0 else f"+{diff_payment:,.0f} Kč",
+                "Zaplaceno za fixaci": f"{f.paid_in_fixation:,.0f} Kč",
+                "  z toho úroky": f"{f.interest_in_fixation:,.0f} Kč",
+                "  z toho jistina": f"{f.principal_in_fixation:,.0f} Kč",
+                "Poplatky": f"{f.additional_costs_in_fixation:,.0f} Kč" if f.additional_costs_in_fixation > 0 else "—",
                 "Přechod": f"{f.switching_costs:,.0f} Kč" if f.switching_costs > 0 else "—",
                 "Bonus": f"−{s.bonus:,.0f} Kč" if s.bonus > 0 else "—",
-                "Celk. náklady fixace": f"{f.total_cost_in_fixation:,.0f} Kč",
-                "Splaceno jistiny": f"{f.principal_in_fixation:,.0f} Kč",
+                "Celk. náklady": f"{f.total_cost_in_fixation:,.0f} Kč",
+                "Rozdíl náklady": "Nejlevnější" if diff_total == 0 else f"+{diff_total:,.0f} Kč",
                 "Zůstatek": f"{f.remaining_balance:,.0f} Kč",
-                "Rozdíl": "Nejlevnější" if diff_total == 0 else f"+{diff_total:,.0f} Kč",
             })
 
         st.dataframe(pd.DataFrame(fix_table), use_container_width=True, hide_index=True)
 
-        # Metriky nejlevnější vs ostatní
+        # Metriky — splátky a náklady vedle sebe
         if len(fix_summaries) >= 2:
+            st.markdown("##### Měsíční splátky")
+            cols = st.columns(len(fix_summaries))
+            for col, (s, f) in zip(cols, fix_summaries):
+                diff_pmt = s.monthly_total - cheapest_payment
+                with col:
+                    st.metric(
+                        s.bank_name,
+                        f"{s.monthly_total:,.0f} Kč/měs",
+                        delta=f"{diff_pmt:+,.0f} Kč" if diff_pmt != 0 else "Nejnižší",
+                        delta_color="inverse" if diff_pmt != 0 else "off",
+                    )
+                    if s.monthly_total != s.monthly_payment:
+                        st.caption(f"Splátka {s.monthly_payment:,.0f} + poplatky {s.monthly_total - s.monthly_payment:,.0f} Kč")
+
+            st.markdown("##### Celkové náklady za fixaci")
             cols = st.columns(len(fix_summaries))
             for col, (s, f) in zip(cols, fix_summaries):
                 diff = f.total_cost_in_fixation - best_f.total_cost_in_fixation
@@ -495,42 +517,50 @@ with _tab["Srovnání nabídek"]:
                         delta_color="inverse" if diff != 0 else "off",
                     )
                     st.caption(
-                        f"Splátka {s.monthly_payment:,.0f} Kč/měs\n\n"
                         f"Úroky {f.interest_in_fixation:,.0f} Kč\n\n"
-                        f"Splaceno jistiny {f.principal_in_fixation:,.0f} Kč"
+                        f"Splaceno jistiny {f.principal_in_fixation:,.0f} Kč\n\n"
+                        f"Zůstatek {f.remaining_balance:,.0f} Kč"
                     )
 
-            # Měsíční rozdíl
+            # Souhrn
             worst_s, worst_f = max(fix_summaries, key=lambda x: x[1].total_cost_in_fixation)
             if worst_f.total_cost_in_fixation > best_f.total_cost_in_fixation:
-                monthly_diff = worst_f.effective_monthly_cost - best_f.effective_monthly_cost
                 total_diff = worst_f.total_cost_in_fixation - best_f.total_cost_in_fixation
+                pmt_diff = worst_s.monthly_total - best_s.monthly_total
                 st.info(
-                    f"**{best_s.bank_name}** ušetří oproti **{worst_s.bank_name}** "
-                    f"celkem **{total_diff:,.0f} Kč** za fixaci "
-                    f"(~{monthly_diff:,.0f} Kč/měsíc)."
+                    f"**{best_s.bank_name}** je levnější než **{worst_s.bank_name}**: "
+                    f"úspora **{total_diff:,.0f} Kč** za fixaci, "
+                    f"splátka o **{pmt_diff:,.0f} Kč/měs** nižší."
                 )
 
     # Porovnání s referenční stávající hypotékou
     if current and fix_summaries:
         from mortgage import _cost_over_months as _com
+        cur_summary = calculate_summary(current)
         st.subheader("Úspora oproti stávající hypotéce")
-        st.caption(f"Kolik ušetříte za dobu fixace oproti pokračování se stávající sazbou {current.annual_rate:.2f} %.")
+        st.caption(f"Porovnání se stávající sazbou {current.annual_rate:.2f} % "
+                   f"(splátka {cur_summary.monthly_payment:,.0f} Kč, "
+                   f"celkem {cur_summary.monthly_total:,.0f} Kč/měs).")
         ref_cols = st.columns(len(fix_summaries))
         for col, (s, f) in zip(ref_cols, fix_summaries):
             cur_cost = _com(current, f.fixation_months)
-            saving = cur_cost - f.total_cost_in_fixation
-            monthly_saving = s.monthly_total - calculate_summary(current).monthly_total
+            cost_saving = cur_cost - f.total_cost_in_fixation
+            pmt_saving = cur_summary.monthly_total - s.monthly_total
             with col:
                 st.metric(
                     s.bank_name,
-                    f"{saving:+,.0f} Kč",
-                    delta=f"{-monthly_saving:+,.0f} Kč/měs" if monthly_saving != 0 else "Stejná splátka",
+                    f"{cost_saving:+,.0f} Kč za fixaci",
                     delta_color="normal",
                 )
+                st.metric(
+                    "Rozdíl splátky",
+                    f"{pmt_saving:+,.0f} Kč/měs",
+                    delta=f"{s.monthly_total:,.0f} vs {cur_summary.monthly_total:,.0f} Kč",
+                    delta_color="off",
+                )
                 st.caption(
-                    f"Stávající: {cur_cost:,.0f} Kč za {f.fixation_months} měs.\n\n"
-                    f"Nová: {f.total_cost_in_fixation:,.0f} Kč za {f.fixation_months} měs."
+                    f"Náklady stávající: {cur_cost:,.0f} Kč\n\n"
+                    f"Náklady nová: {f.total_cost_in_fixation:,.0f} Kč"
                 )
 
     # Matice fixací
