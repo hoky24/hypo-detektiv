@@ -567,11 +567,12 @@ with _tab["Srovnání nabídek"]:
     st.plotly_chart(fig_bal, use_container_width=True)
 
     if len(summaries) >= 2:
+        _cheapest = min(summaries, key=lambda s: s.monthly_total)
         fig_sav = go.Figure()
         names = [s.bank_name for s in summaries]
-        diffs = [s.monthly_total - best.monthly_total for s in summaries]
+        diffs = [s.monthly_total - _cheapest.monthly_total for s in summaries]
         fig_sav.add_trace(go.Bar(x=names, y=diffs, marker_color=["#2ecc71" if d == 0 else "#e74c3c" for d in diffs]))
-        fig_sav.update_layout(title=f"Měsíční přeplatek oproti {best.bank_name}", yaxis_title="Kč/měsíc")
+        fig_sav.update_layout(title=f"Měsíční přeplatek oproti {_cheapest.bank_name}", yaxis_title="Kč/měsíc")
         st.plotly_chart(fig_sav, use_container_width=True)
 
     # Podmínky
