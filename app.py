@@ -106,18 +106,17 @@ if "_pending_csv" in st.session_state:
 
     # Zajistit checkbox "Mám stávající hypotéku"
     st.session_state["has_current"] = True
+    st.session_state["cur_bank"] = "ČSOB"
     # Smazat výsledky, aby se expander rozbalil a uživatel viděl předvyplněná data
     st.session_state["offers"] = []
 
-    # Pokud jsou 2+ fixační období → poslední = nová nabídka
+    # Pokud jsou 2+ fixační období → poslední = nová nabídka ČSOB
     if len(_periods) >= 2:
         _last_p = _periods[-1]
         _balance = _cur.get("balance", 0)
         _rem_years = _cur.get("remaining_years", _last_p["months"] // 12)
 
-        # Nabídka 1 = poslední sazba z CSV
-        _bank_name = st.session_state.get("cur_bank", "") or "ČSOB"
-        st.session_state["o0_bank"] = _bank_name
+        st.session_state["o0_bank"] = "ČSOB"
         st.session_state["o0_rate"] = _last_p["rate"]
         st.session_state["o0_years"] = _rem_years
         st.session_state["o0_principal"] = _balance
@@ -223,13 +222,13 @@ def _find_offer_by_name(name, summaries_list, offers_list, current_mortgage):
 
 with st.expander("Vstupní data", expanded=not st.session_state.offers):
 
-    # --- Import CSV z banky (nahoře, předvyplní vše) ---
-    st.subheader("Import splátkového plánu")
-    st.caption("Nahrajte CSV z banky — automaticky předvyplní stávající hypotéku, historii i nabídku.")
+    # --- Import CSV z ČSOB ---
+    st.subheader("Import splátkového plánu z ČSOB")
+    st.caption("Nahrajte CSV splátkového plánu z ČSOB — automaticky předvyplní stávající hypotéku, historii i novou nabídku ČSOB.")
     csv_file = st.file_uploader(
-        "CSV splátkový kalendář", type=["csv"],
+        "CSV splátkový kalendář (ČSOB)", type=["csv"],
         key="cur_history_csv",
-        help="Formát ČSOB: Datum;Čerpání;Sazba;Splátka;Úrok;Jistina;Nesplacená jistina")
+        help="Splátkový plán z ČSOB ve formátu: Datum;Čerpání;Sazba;Splátka;Úrok;Jistina;Nesplacená jistina (kódování Windows-1250)")
 
     if csv_file is not None and "_past_schedule" not in st.session_state:
         try:
@@ -282,7 +281,7 @@ with st.expander("Vstupní data", expanded=not st.session_state.offers):
 
     if has_current:
         st.subheader("Stávající hypotéka")
-        _init("cur_bank", "")
+        _init("cur_bank", "Moje banka")
         cur_bank = st.text_input("Stávající banka", key="cur_bank")
         c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
         with c1:
