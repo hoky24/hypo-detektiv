@@ -112,7 +112,8 @@ if "_pending_csv" in st.session_state:
     # Zajistit checkbox "Mám stávající hypotéku"
     st.session_state["has_current"] = True
     st.session_state["cur_bank"] = "ČSOB"
-    # Smazat výsledky, aby se expander rozbalil a uživatel viděl předvyplněná data
+    # Rozbalit vstupní data a smazat výsledky, aby uživatel viděl předvyplněná data
+    st.session_state["_inputs_expanded"] = True
     st.session_state["offers"] = []
 
     # Pokud jsou 2+ fixační období → poslední = nová nabídka ČSOB
@@ -225,7 +226,8 @@ def _find_offer_by_name(name, summaries_list, offers_list, current_mortgage):
 # VSTUPNÍ DATA
 # ============================================================
 
-with st.expander("Vstupní data", expanded=not st.session_state.offers):
+_init("_inputs_expanded", True)
+with st.expander("Vstupní data", expanded=st.session_state["_inputs_expanded"]):
 
     # --- Import CSV z ČSOB ---
     st.subheader("Import splátkového plánu z ČSOB")
@@ -392,6 +394,10 @@ with st.expander("Vstupní data", expanded=not st.session_state.offers):
             ))
 
     st.session_state.offers = offers
+
+    # Sbalit vstupní data po prvním vyplnění nabídek
+    if offers and st.session_state.get("_inputs_expanded", True):
+        st.session_state["_inputs_expanded"] = False
 
 
 # ============================================================
