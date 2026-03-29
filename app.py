@@ -222,20 +222,81 @@ def _find_offer_by_name(name, summaries_list, offers_list, current_mortgage):
 # ============================================================
 
 with st.expander("Vstupní data", expanded=not st.session_state.offers):
+
+    # --- Import CSV z banky (nahoře, předvyplní vše) ---
+    st.subheader("Import splátkového plánu")
+    st.caption("Nahrajte CSV z banky — automaticky předvyplní stávající hypotéku, historii i nabídku.")
+    csv_file = st.file_uploader(
+        "CSV splátkový kalendář", type=["csv"],
+        key="cur_history_csv",
+        help="Formát ČSOB: Datum;Čerpání;Sazba;Splátka;Úrok;Jistina;Nesplacená jistina")
+
+    if csv_file is not None and "_past_schedule" not in st.session_state:
+        try:
+            result = import_bank_csv(csv_file.read())
+            st.session_state["_pending_csv"] = result
+            st.rerun()
+        except Exception as e:
+            st.error(f"Chyba při importu CSV: {e}")
+
+    if st.session_state.get("_past_schedule"):
+        past = st.session_state["_past_schedule"]
+        periods = st.session_state.get("_csv_periods", [])
+
+        if periods:
+            st.markdown("**Detekovaná fixační období:**")
+            for pi, p in enumerate(periods):
+                years = p["months"] / 12
+                st.caption(
+                    f"{pi+1}. Sazba **{p['rate']:.2f} %** — "
+                    f"{p['months']} měs. ({years:.1f} let), "
+                    f"{p['first_date']} – {p['last_date']}")
+
+            if len(periods) >= 2:
+                _init("_csv_last_is_offer", True)
+                st.checkbox(
+                    f"Poslední sazba ({periods[-1]['rate']:.2f} %) je nová nabídka od banky",
+                    key="_csv_last_is_offer",
+                    help="Zaškrtněte, pokud CSV obsahuje modelaci nové nabídky. "
+                         "Odškrtněte, pokud celé CSV je průběh stávající hypotéky.")
+
+                if not st.session_state["_csv_last_is_offer"]:
+                    all_rows = st.session_state.get("_csv_all_rows", [])
+                    st.session_state["_past_schedule"] = all_rows
+
+        st.caption(
+            f"Historie: {len(past)} měsíců, "
+            f"zůstatek {past[-1].remaining_balance:,.0f} Kč, "
+            f"zaplaceno úroky {past[-1].cumulative_interest:,.0f} Kč")
+
+        if st.button("Smazat import", key="clear_history"):
+            for k in ("_past_schedule", "_csv_all_rows", "_csv_periods"):
+                st.session_state.pop(k, None)
+            st.rerun()
+
+    st.divider()
+
+    # --- Stávající hypotéka ---
+    _init("has_current", False)
     has_current = st.checkbox("Mám stávající hypotéku", key="has_current")
 
     if has_current:
         st.subheader("Stávající hypotéka")
-        cur_bank = st.text_input("Stávající banka", value="Moje banka", key="cur_bank")
+        _init("cur_bank", "")
+        cur_bank = st.text_input("Stávající banka", key="cur_bank")
         c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
         with c1:
-            cur_principal = st.number_input("Zbývající jistina (Kč)", min_value=100_000.0, max_value=50_000_000.0, value=2_000_000.0, step=100_000.0, key="cur_principal")
+            _init("cur_principal", 2_000_000.0)
+            cur_principal = st.number_input("Zbývající jistina (Kč)", min_value=100_000.0, max_value=50_000_000.0, step=100_000.0, key="cur_principal")
         with c2:
-            cur_rate = st.number_input("Aktuální sazba (%)", min_value=0.0, max_value=20.0, value=5.5, step=0.1, format="%.2f", key="cur_rate")
+            _init("cur_rate", 5.5)
+            cur_rate = st.number_input("Aktuální sazba (%)", min_value=0.0, max_value=20.0, step=0.1, format="%.2f", key="cur_rate")
         with c3:
-            cur_years = st.number_input("Zbývající doba (roky)", min_value=1, max_value=40, value=20, key="cur_years")
+            _init("cur_years", 20)
+            cur_years = st.number_input("Zbývající doba (roky)", min_value=1, max_value=40, key="cur_years")
         with c4:
-            cur_fix = st.number_input("Zbývající fixace (roky)", min_value=0, max_value=15, value=0, key="cur_fix")
+            _init("cur_fix", 0)
+            cur_fix = st.number_input("Zbývající fixace (roky)", min_value=0, max_value=15, key="cur_fix")
 
         _init("cur_fix_date", datetime.date.today() + datetime.timedelta(days=90))
         cur_fix_date = st.date_input("Datum konce fixace", key="cur_fix_date",
@@ -244,11 +305,10 @@ with st.expander("Vstupní data", expanded=not st.session_state.offers):
         days_to_end = (cur_fix_date - today).days
         date_str = cur_fix_date.strftime("%d. %m. %Y").lstrip("0").replace(". 0", ". ")
         if days_to_end > 0:
-            # Kalendářní měsíce a zbývající dny
+            import calendar
             m = (cur_fix_date.year - today.year) * 12 + cur_fix_date.month - today.month
             if cur_fix_date.day < today.day:
                 m -= 1
-                import calendar
                 prev_m = cur_fix_date.month - 1 if cur_fix_date.month > 1 else 12
                 prev_y = cur_fix_date.year if cur_fix_date.month > 1 else cur_fix_date.year - 1
                 d = calendar.monthrange(prev_y, prev_m)[1] - today.day + cur_fix_date.day
@@ -268,60 +328,6 @@ with st.expander("Vstupní data", expanded=not st.session_state.offers):
         with st.expander("Poplatky stávající hypotéky"):
             cur_costs = render_additional_costs("cur_ac", "Stávající poplatky/pojištění")
 
-        # Historie hypotéky — import CSV z banky
-        with st.expander("Historie hypotéky (volitelné)"):
-            st.caption("Nahrajte CSV splátkového kalendáře z banky pro zobrazení celého průběhu. "
-                       "Údaje o stávající hypotéce a nové nabídce se předvyplní automaticky.")
-            csv_file = st.file_uploader(
-                "CSV splátkový kalendář", type=["csv"],
-                key="cur_history_csv",
-                help="Formát ČSOB: Datum;Čerpání;Sazba;Splátka;Úrok;Jistina;Nesplacená jistina (kódování Windows-1250 nebo UTF-8)")
-
-            if csv_file is not None and "_past_schedule" not in st.session_state:
-                try:
-                    result = import_bank_csv(csv_file.read())
-                    st.session_state["_pending_csv"] = result
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Chyba při importu CSV: {e}")
-
-            if st.session_state.get("_past_schedule"):
-                past = st.session_state["_past_schedule"]
-                periods = st.session_state.get("_csv_periods", [])
-
-                # Zobrazit detekovaná fixační období
-                if periods:
-                    st.markdown("**Detekovaná fixační období:**")
-                    for pi, p in enumerate(periods):
-                        years = p["months"] / 12
-                        st.caption(
-                            f"{pi+1}. Sazba **{p['rate']:.2f} %** — "
-                            f"{p['months']} měs. ({years:.1f} let), "
-                            f"{p['first_date']} – {p['last_date']}")
-
-                    if len(periods) >= 2:
-                        _init("_csv_last_is_offer", True)
-                        is_offer = st.checkbox(
-                            f"Poslední sazba ({periods[-1]['rate']:.2f} %) je nová nabídka od banky",
-                            key="_csv_last_is_offer",
-                            help="Zaškrtněte, pokud CSV obsahuje modelaci nové nabídky. "
-                                 "Odškrtněte, pokud celé CSV je průběh stávající hypotéky.")
-
-                        if not is_offer:
-                            # Celé CSV = stávající hypotéka, použít všechny řádky jako historii
-                            all_rows = st.session_state.get("_csv_all_rows", [])
-                            st.session_state["_past_schedule"] = all_rows
-
-                st.caption(
-                    f"Historie: {len(past)} měsíců, "
-                    f"zůstatek {past[-1].remaining_balance:,.0f} Kč, "
-                    f"zaplaceno úroky {past[-1].cumulative_interest:,.0f} Kč")
-
-                if st.button("Smazat historii", key="clear_history"):
-                    for k in ("_past_schedule", "_csv_all_rows", "_csv_periods"):
-                        st.session_state.pop(k, None)
-                    st.rerun()
-
         st.session_state.current_mortgage = MortgageParams(
             principal=cur_principal, annual_rate=cur_rate, years=cur_years,
             bank_name=cur_bank, additional_costs=cur_costs,
@@ -332,8 +338,11 @@ with st.expander("Vstupní data", expanded=not st.session_state.offers):
         st.session_state.current_mortgage = None
 
     st.divider()
+
+    # --- Nabídky bank ---
     st.subheader("Nabídky bank")
-    n_offers = st.number_input("Počet nabídek", min_value=1, max_value=10, value=2, key="n_offers")
+    _init("n_offers", 2)
+    n_offers = st.number_input("Počet nabídek", min_value=1, max_value=10, key="n_offers")
 
     offers = []
     for i in range(n_offers):
@@ -341,14 +350,16 @@ with st.expander("Vstupní data", expanded=not st.session_state.offers):
             bank = st.text_input("Banka", key=f"o{i}_bank")
             c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
             with c1:
-                _init(f"o{i}_principal", cur_principal if has_current else 3_000_000.0)
+                _default_principal = st.session_state.get("cur_principal", 3_000_000.0) if has_current else 3_000_000.0
+                _init(f"o{i}_principal", _default_principal)
                 principal = st.number_input("Výše úvěru (Kč)", min_value=100_000.0, max_value=50_000_000.0,
                                             step=100_000.0, key=f"o{i}_principal")
             with c2:
                 _init(f"o{i}_rate", 5.0)
                 rate = st.number_input("Sazba (%)", min_value=0.0, max_value=20.0, step=0.1, format="%.2f", key=f"o{i}_rate")
             with c3:
-                _init(f"o{i}_years", cur_years if has_current else 25)
+                _default_years = st.session_state.get("cur_years", 25) if has_current else 25
+                _init(f"o{i}_years", _default_years)
                 years = st.number_input("Splácení (roky)", min_value=1, max_value=40, key=f"o{i}_years")
             with c4:
                 _init(f"o{i}_fix", 5)
