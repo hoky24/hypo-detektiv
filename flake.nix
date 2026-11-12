@@ -10,7 +10,14 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        python = pkgs.python3;
+        python = pkgs.python3.override {
+          packageOverrides = self: super: {
+            # streamlit 1.58 deklaruje pillow<13, nixpkgs má 13.0 – runtime funguje
+            streamlit = super.streamlit.overridePythonAttrs (old: {
+              pythonRelaxDeps = (old.pythonRelaxDeps or [ ]) ++ [ "pillow" ];
+            });
+          };
+        };
 
         pythonEnv = python.withPackages (ps: with ps; [
           streamlit
